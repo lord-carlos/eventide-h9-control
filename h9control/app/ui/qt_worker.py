@@ -9,9 +9,10 @@ from collections.abc import Callable
 from PySide6 import QtCore
 
 from h9control.app.state import DashboardState, KnobBarState
-from h9control.domain.knob_display import format_knob_value
-from h9control.domain.preset import parse_preset_dump_text
-from h9control.protocol.codes import H9SysexCodes, H9SystemKeys
+from h9control.app.h9_backend import H9Backend
+from h9control.domain.knob_display import format_knob_value, step_timefactor_delay_note_raw
+from h9control.domain.preset import PresetSnapshot, parse_preset_dump_text
+from h9control.protocol.codes import H9SysexCodes
 from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
 from h9control.protocol.sysex import SysexFrame, build_eventide_sysex, decode_eventide_sysex
 from h9control.transport.midi_transport import MidiTransport
@@ -106,6 +107,15 @@ class H9DeviceWorker(QtCore.QObject):
 
         self._last_state = DashboardState(connected=False, status_text="Disconnected")
         self._current_program: int = 0
+        self._knob_overrides: dict[str, int] = {}
+        self._last_good_bpm: float | None = None
+
+        self._backend = H9Backend(
+            send_eventide=self._send_eventide,
+            wait_for_frame=lambda predicate, timeout_s: self._wait_for_frame(
+                predicate, timeout_s=timeout_s
+            ),
+        )
 
     @QtCore.Slot()
     def connect_or_refresh(self) -> None:
@@ -124,6 +134,81 @@ class H9DeviceWorker(QtCore.QObject):
     @QtCore.Slot()
     def prev_preset(self) -> None:
         self._change_preset(delta=-1)
+
+    @QtCore.Slot(str, int)
+    def adjust_knob(self, knob_name: str, delta: int) -> None:
+        """Keyboard-driven knob tweak.
+
+        For now this updates the UI model in discrete steps.
+        (We don't yet have the SysEx key IDs needed to push individual knob values via VALUE_PUT.)
+        """
+
+        name = knob_name.strip().upper()
+        if name not in {"DLY-A", "DLY-B", "FBK-A", "FBK-B"}:
+            return
+
+        algo_key = (self._last_state.algorithm_key or "").upper()
+
+        # Determine current raw value.
+        current_raw: int | None = None
+        if name in self._knob_overrides:
+            current_raw = self._knob_overrides[name]
+        else:
+            for k in self._last_state.knobs:
+                if k.name.upper() == name:
+                    current_raw = int(getattr(k, "raw_value", 0))
+                    break
+        if current_raw is None:
+            return
+
+        if name in {"DLY-A", "DLY-B"} and algo_key in {"DIGDLY", "VNTAGE", "TAPE", "MODDLY"}:
+            new_raw = step_timefactor_delay_note_raw(current_raw, delta=delta)
+        else:
+            # Coarse stepping for other knobs.
+            step = int(round(MAX_KNOB_VALUE_14BIT * 0.05))  # 5%
+            new_raw = max(0, min(MAX_KNOB_VALUE_14BIT, current_raw + (step * (1 if delta > 0 else -1))))
+
+        self._knob_overrides[name] = new_raw
+        self._emit_state(self._state_with_overrides())
+
+    @QtCore.Slot(int)
+    def adjust_bpm(self, delta_bpm: int) -> None:
+        if self._transport is None:
+            self._connect()
+        if self._transport is None:
+            return
+
+        bpm_now = self._sanitize_bpm(self._last_state.bpm)
+        if bpm_now is None:
+            return
+
+        target = int(round(bpm_now)) + int(delta_bpm)
+        target = max(20, min(300, target))
+
+        try:
+            self._backend.set_bpm(target)
+        except Exception:
+            self._logger.exception("Failed to set BPM")
+            return
+
+        # Re-read state so UI stays in sync with the pedal.
+        self._refresh_state()
+
+    def _sanitize_bpm(self, bpm: float | None) -> float | None:
+        if bpm is None:
+            return self._last_good_bpm
+
+        # Guardrail: we have observed occasional bogus tempo reads.
+        if bpm < 20.0 or bpm > 300.0:
+            self._logger.debug(
+                "Ignoring implausible BPM reading: %s (last_good=%s)",
+                bpm,
+                self._last_good_bpm,
+            )
+            return self._last_good_bpm
+
+        self._last_good_bpm = bpm
+        return bpm
 
     @QtCore.Slot()
     def shutdown(self) -> None:
@@ -172,11 +257,20 @@ class H9DeviceWorker(QtCore.QObject):
     def _refresh_state(self) -> None:
         try:
             preset = self._request_current_program(timeout_s=2.0)
+
+            # If the preset changed, drop any UI overrides.
+            if (
+                preset.preset_number is not None
+                and preset.preset_number != self._last_state.preset_number
+            ):
+                self._knob_overrides.clear()
+
             bpm: float | None = None
             try:
-                bpm = self._get_current_bpm(timeout_s=1.0)
+                bpm = self._backend.get_bpm(timeout_s=1.0)
             except Exception:
                 bpm = None
+            bpm = self._sanitize_bpm(bpm)
 
             current_program = self._current_program
             if preset.preset_number is not None:
@@ -188,8 +282,9 @@ class H9DeviceWorker(QtCore.QObject):
             if preset.knobs_by_name:
                 for name in wanted_order:
                     if name not in preset.knobs_by_name:
-                        continue
-                    raw = preset.knobs_by_name[name]
+                        override = self._knob_overrides.get(name)
+                        raw = int(preset.knobs_by_name[name] if override is None else override)
+                    raw = int(self._knob_overrides.get(name, preset.knobs_by_name[name]))
                     pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
                     pretty = format_knob_value(
                         algorithm_key=preset.algorithm_key,
@@ -265,6 +360,41 @@ class H9DeviceWorker(QtCore.QObject):
         self._last_state = state
         self.state_changed.emit(state)
 
+    def _state_with_overrides(self) -> DashboardState:
+        prev = self._last_state
+        if not prev.knobs:
+            return prev
+
+        updated: list[KnobBarState] = []
+        for k in prev.knobs:
+            name = k.name
+            raw = int(self._knob_overrides.get(name.upper(), k.raw_value))
+            pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
+            pretty = format_knob_value(
+                algorithm_key=prev.algorithm_key,
+                knob_name=name,
+                raw_value=raw,
+            )
+            updated.append(
+                KnobBarState(
+                    name=name,
+                    percent=max(0, min(100, pct)),
+                    raw_value=raw,
+                    pretty=(pretty.label if pretty is not None else k.pretty),
+                )
+            )
+
+        return DashboardState(
+            connected=prev.connected,
+            status_text=prev.status_text,
+            preset_number=prev.preset_number,
+            preset_name=prev.preset_name,
+            algorithm_name=prev.algorithm_name,
+            algorithm_key=prev.algorithm_key,
+            bpm=prev.bpm,
+            knobs=tuple(updated),
+        )
+
     def _start_rx_thread_if_needed(self) -> None:
         if self._transport is None:
             return
@@ -333,7 +463,7 @@ class H9DeviceWorker(QtCore.QObject):
         msg = build_eventide_sysex(self._connected_device_id, command, payload)
         self._transport.send_sysex(msg)
 
-    def _request_current_program(self, *, timeout_s: float) -> object:
+    def _request_current_program(self, *, timeout_s: float) -> PresetSnapshot:
         self._logger.info("Requesting current program")
         self._send_eventide(H9SysexCodes.SYSEXC_TJ_PROGRAM_WANT)
 
@@ -344,32 +474,6 @@ class H9DeviceWorker(QtCore.QObject):
 
         raw_text = frame.payload.decode("ascii", errors="replace")
         return parse_preset_dump_text(raw_text)
-
-    def _get_current_bpm(self, *, timeout_s: float) -> float:
-        value = self._get_value(H9SystemKeys.KEY_SP_TEMPO, timeout_s=timeout_s)
-        return value / 100.0
-
-    def _get_value(self, key: int, *, timeout_s: float) -> int:
-        key_str = f"{key:X}".encode("ascii")
-        self._send_eventide(H9SysexCodes.SYSEXC_VALUE_WANT, key_str)
-
-        requested_key_hex = f"{key:X}".upper()
-
-        frame = self._wait_for_frame(
-            lambda f: f.command == H9SysexCodes.SYSEXC_VALUE_DUMP
-            and f.payload.decode("ascii", errors="replace").strip("\x00\r\n ").upper().startswith(requested_key_hex),
-            timeout_s=timeout_s,
-        )
-
-        text = frame.payload.decode("ascii", errors="replace").strip("\x00\r\n ")
-        parts = text.split()
-        if len(parts) < 2:
-            raise ValueError(f"Unexpected VALUE_DUMP payload: {text!r}")
-
-        value_part = parts[1]
-        if value_part.lstrip("-").isdigit():
-            return int(value_part, 10)
-        return int(value_part, 16)
 
     @QtCore.Slot()
     def _on_preset_change_detected(self) -> None:

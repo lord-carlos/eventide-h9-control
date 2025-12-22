@@ -113,3 +113,26 @@ def format_knob_value(
         return QuantizedValue(label=format_timefactor_dlymix(raw_value), division=None)
 
     return None
+
+
+def step_timefactor_delay_note_raw(current_raw: int, *, delta: int) -> int:
+    """Step a tempo-synced TimeFactor delay knob in discrete musical divisions.
+
+    Returns a new raw value in the same 0..MAX_KNOB_VALUE_14BIT space.
+    """
+
+    if delta == 0:
+        return max(0, min(MAX_KNOB_VALUE_14BIT, current_raw))
+
+    current_div = quantize_timefactor_delay_note(current_raw)
+    divisions = [div for _, div in _TIMEFACTOR_DELAY_NOTE_POINTS]
+
+    try:
+        idx = divisions.index(current_div)
+    except ValueError:
+        idx = 0
+
+    new_idx = max(0, min(len(divisions) - 1, idx + (1 if delta > 0 else -1)))
+    target_pct = _TIMEFACTOR_DELAY_NOTE_POINTS[new_idx][0]
+    target_raw = int(round((target_pct / 100.0) * MAX_KNOB_VALUE_14BIT))
+    return max(0, min(MAX_KNOB_VALUE_14BIT, target_raw))

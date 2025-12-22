@@ -42,6 +42,9 @@ def main() -> None:
     window.next_requested.connect(worker.next_preset, QtCore.Qt.ConnectionType.QueuedConnection)
     window.prev_requested.connect(worker.prev_preset, QtCore.Qt.ConnectionType.QueuedConnection)
 
+    window.adjust_knob_requested.connect(worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.adjust_bpm_requested.connect(worker.adjust_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
+
     worker.state_changed.connect(window.apply_state)
 
     app.aboutToQuit.connect(worker.shutdown)

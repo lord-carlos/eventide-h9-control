@@ -86,6 +86,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
     connect_refresh_requested = QtCore.Signal()
     next_requested = QtCore.Signal()
     prev_requested = QtCore.Signal()
+    adjust_knob_requested = QtCore.Signal(str, int)
+    adjust_bpm_requested = QtCore.Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -221,6 +223,29 @@ class DashboardWindow(QtWidgets.QMainWindow):
         layout.addWidget(bottom, 1)
 
         self._apply_state(DashboardState(connected=False, status_text="Disconnected"))
+
+        self._install_shortcuts()
+
+    def _install_shortcuts(self) -> None:
+        def bind(key: str, fn: callable) -> None:
+            sc = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+            sc.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(fn)
+
+        bind("1", lambda: self.adjust_knob_requested.emit("DLY-A", +1))
+        bind("Q", lambda: self.adjust_knob_requested.emit("DLY-A", -1))
+
+        bind("2", lambda: self.adjust_knob_requested.emit("DLY-B", +1))
+        bind("W", lambda: self.adjust_knob_requested.emit("DLY-B", -1))
+
+        bind("3", lambda: self.adjust_knob_requested.emit("FBK-A", +1))
+        bind("E", lambda: self.adjust_knob_requested.emit("FBK-A", -1))
+
+        bind("4", lambda: self.adjust_knob_requested.emit("FBK-B", +1))
+        bind("R", lambda: self.adjust_knob_requested.emit("FBK-B", -1))
+
+        bind("5", lambda: self.adjust_bpm_requested.emit(+1))
+        bind("T", lambda: self.adjust_bpm_requested.emit(-1))
 
     def apply_state(self, state: DashboardState) -> None:
         self._apply_state(state)
