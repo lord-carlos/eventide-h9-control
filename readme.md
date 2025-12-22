@@ -10,3 +10,8 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 ## Todo
 - We need to be able to send out midi messages.
 - We need to find out in what order each button on each effect is. That information we might be able to find in documentaion/H9AlgorithmGuide+V12.pdf
+
+## Notes
+
+Traktor delay rates:
+ - 4/4, 3/8, 1/4, 3/16, 1/8, 1/16, 1/32

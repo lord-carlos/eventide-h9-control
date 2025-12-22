@@ -37,5 +37,9 @@ class H9SystemKeys:
     KEY_SP_BYPASS = 0x102
     KEY_SP_TAP_SYN = 0x107
 
+    # Word keys (base 0x300)
+    # Tempo is represented as BPM * 100.
+    KEY_SP_TEMPO = 0x302
+
 
 MAX_KNOB_VALUE_14BIT = 0x7FE0

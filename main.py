@@ -5,6 +5,7 @@ import time
 from midi import H9Midi
 
 from h9control.logging_setup import configure_logging
+from h9control.domain.knob_display import format_knob_value
 from h9control.protocol.h9_protocol import H9Protocol
 from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
 from h9control.transport.midi_transport import MidiTransport
@@ -28,6 +29,11 @@ def main():
         default=0,
         help="MIDI channel for Program Change (0-15). Default: 0.",
     )
+    parser.add_argument(
+        "--print-bpm",
+        action="store_true",
+        help="Request and print the current BPM from the unit.",
+    )
     args = parser.parse_args()
 
     configure_logging(cli_level=args.log_level)
@@ -46,6 +52,10 @@ def main():
     h9 = H9Protocol(transport, device_id=1)
 
     try:
+        if args.print_bpm:
+            bpm = h9.get_current_bpm(timeout_s=2.0)
+            logger.info("Current BPM: %.2f", bpm)
+
         preset = h9.request_current_program(timeout_s=2.0)
         logger.info("Current preset snapshot:")
         logger.info("- preset_number: %s", preset.preset_number)
@@ -62,7 +72,15 @@ def main():
             logger.info("Knobs:")
             for name, value in preset.knobs_by_name.items():
                 pct = (value / MAX_KNOB_VALUE_14BIT) * 100.0
-                logger.info("- %s: %d (%.1f%%)", name, value, pct)
+                pretty = format_knob_value(
+                    algorithm_key=preset.algorithm_key,
+                    knob_name=name,
+                    raw_value=value,
+                )
+                if pretty is not None:
+                    logger.info("- %s: %d (%.1f%%) -> %s", name, value, pct, pretty.label)
+                else:
+                    logger.info("- %s: %d (%.1f%%)", name, value, pct)
         elif preset.knob_values is not None:
             logger.info("Knobs (unmapped): %s", preset.knob_values)
 
@@ -98,7 +116,15 @@ def main():
                 logger.info("Knobs:")
                 for name, value in preset2.knobs_by_name.items():
                     pct = (value / MAX_KNOB_VALUE_14BIT) * 100.0
-                    logger.info("- %s: %d (%.1f%%)", name, value, pct)
+                    pretty = format_knob_value(
+                        algorithm_key=preset2.algorithm_key,
+                        knob_name=name,
+                        raw_value=value,
+                    )
+                    if pretty is not None:
+                        logger.info("- %s: %d (%.1f%%) -> %s", name, value, pct, pretty.label)
+                    else:
+                        logger.info("- %s: %d (%.1f%%)", name, value, pct)
             elif preset2.knob_values is not None:
                 logger.info("Knobs (unmapped): %s", preset2.knob_values)
     except TimeoutError as exc:
