@@ -15,3 +15,16 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 
 Traktor delay rates:
  - 4/4, 3/8, 1/4, 3/16, 1/8, 1/16, 1/32
+
+## UI Dashboard (Qt / PySide6)
+
+A minimal dashboard intended for a Raspberry Pi touchscreen.
+
+- Run on Windows (dev): `uv run python ui_main.py`
+- Run on Raspberry Pi (64-bit): `uv run python ui_main.py`
+
+Note: currently starts windowed at 720×1280 for debugging.
+
+Controls:
+- `Connect / Refresh` fetches preset + BPM.
+- `◀` / `▶` sends Program Change (prev/next) and re-reads state.
