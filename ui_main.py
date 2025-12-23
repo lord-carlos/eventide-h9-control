@@ -4,8 +4,10 @@ import argparse
 
 from PySide6 import QtCore, QtWidgets
 
+from h9control.app.config import ConfigManager
 from h9control.app.ui.qt_dashboard import DashboardWindow, fit_window_to_screen
 from h9control.app.ui.qt_worker import H9DeviceWorker
+from h9control.audio.beat_detector import BeatDetector
 from h9control.logging_setup import configure_logging
 
 
@@ -25,6 +27,8 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(cli_level=args.log_level)
+
+    config = ConfigManager()
 
     app = QtWidgets.QApplication([])
 
@@ -47,7 +51,12 @@ def main() -> None:
 
     worker.state_changed.connect(window.apply_state)
 
+    beat_detector = BeatDetector(config)
+    beat_detector.bpm_detected.connect(worker.update_live_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
+    beat_detector.start()
+
     app.aboutToQuit.connect(worker.shutdown)
+    app.aboutToQuit.connect(beat_detector.stop)
     app.aboutToQuit.connect(thread.quit)
     app.aboutToQuit.connect(lambda: thread.wait(2000))
 

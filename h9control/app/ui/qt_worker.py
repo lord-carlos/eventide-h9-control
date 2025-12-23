@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import dataclasses
 from collections import deque
 from collections.abc import Callable
 
@@ -110,6 +111,7 @@ class H9DeviceWorker(QtCore.QObject):
         self._current_program: int = 0
         self._knob_overrides: dict[str, int] = {}
         self._last_good_bpm: float | None = None
+        self._live_bpm: float | None = None
 
         self._backend = H9Backend(
             send_eventide=self._send_eventide,
@@ -378,8 +380,17 @@ class H9DeviceWorker(QtCore.QObject):
             )
 
     def _emit_state(self, state: DashboardState) -> None:
+        if state.live_bpm != self._live_bpm:
+            state = dataclasses.replace(state, live_bpm=self._live_bpm)
         self._last_state = state
         self.state_changed.emit(state)
+
+    @QtCore.Slot(float)
+    def update_live_bpm(self, bpm: float) -> None:
+        if self._live_bpm == bpm:
+            return
+        self._live_bpm = bpm
+        self._emit_state(self._state_with_overrides())
 
     def _state_with_overrides(self) -> DashboardState:
         prev = self._last_state

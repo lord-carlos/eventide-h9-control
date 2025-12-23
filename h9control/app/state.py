@@ -21,6 +21,7 @@ class DashboardState:
     algorithm_name: str | None = None
     algorithm_key: str | None = None
     bpm: float | None = None
+    live_bpm: float | None = None
 
     knobs: tuple[KnobBarState, ...] = ()
 

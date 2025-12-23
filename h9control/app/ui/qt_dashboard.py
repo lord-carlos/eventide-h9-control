@@ -135,6 +135,13 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self._btn_bpm.setFixedWidth(160)
         self._btn_bpm.clicked.connect(self.connect_refresh_requested.emit)
 
+        self._lbl_live_bpm = QtWidgets.QLabel("— Live")
+        self._lbl_live_bpm.setFont(fonts.subtitle)
+        self._lbl_live_bpm.setFixedHeight(70)
+        self._lbl_live_bpm.setFixedWidth(160)
+        self._lbl_live_bpm.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._lbl_live_bpm.setStyleSheet("border: 1px solid #444; border-radius: 4px;")
+
         top_line = QtWidgets.QFrame()
         top_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         top_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -210,6 +217,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         # Left-bound group (~50% width), empty spacer, then BPM button.
         bottom_layout.addWidget(fbk_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
         bottom_layout.addStretch(1)
+        bottom_layout.addWidget(self._lbl_live_bpm, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight)
         bottom_layout.addWidget(self._btn_bpm, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight)
 
         # --- root layout ---
@@ -266,7 +274,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
             self._btn_bpm.setText("— BPM")
         else:
             self._btn_bpm.setText(f"{state.bpm:.0f} BPM")
+if state.live_bpm is None:
+            self._lbl_live_bpm.setText("— Live")
+        else:
+            self._lbl_live_bpm.setText(f"{state.live_bpm:.1f} Live")
 
+        
         knobs_by_name = {k.name: k for k in state.knobs}
         self._apply_knob(self._dly_a, knobs_by_name.get("DLY-A"), fallback_label="DLY-A")
         self._apply_knob(self._dly_b, knobs_by_name.get("DLY-B"), fallback_label="DLY-B")
