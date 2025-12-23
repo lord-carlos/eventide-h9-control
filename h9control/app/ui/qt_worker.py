@@ -10,6 +10,7 @@ from PySide6 import QtCore
 
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
+from h9control.domain.algorithms import H9FullAlgorithmData
 from h9control.domain.knob_display import format_knob_value, step_timefactor_delay_note_raw
 from h9control.domain.preset import PresetSnapshot, parse_preset_dump_text
 from h9control.protocol.codes import H9SysexCodes
@@ -139,8 +140,8 @@ class H9DeviceWorker(QtCore.QObject):
     def adjust_knob(self, knob_name: str, delta: int) -> None:
         """Keyboard-driven knob tweak.
 
-        For now this updates the UI model in discrete steps.
-        (We don't yet have the SysEx key IDs needed to push individual knob values via VALUE_PUT.)
+        Updates the UI model in discrete steps and pushes the change to the pedal
+        via VALUE_PUT using the knob-key scheme.
         """
 
         name = knob_name.strip().upper()
@@ -167,6 +168,26 @@ class H9DeviceWorker(QtCore.QObject):
             # Coarse stepping for other knobs.
             step = int(round(MAX_KNOB_VALUE_14BIT * 0.05))  # 5%
             new_raw = max(0, min(MAX_KNOB_VALUE_14BIT, current_raw + (step * (1 if delta > 0 else -1))))
+
+        # Try to push to device.
+        if self._transport is None:
+            self._connect()
+        if self._transport is not None and algo_key:
+            knob_names = H9FullAlgorithmData.knob_names(algo_key)
+            knob_names_upper = [k.upper() for k in knob_names]
+            if name in knob_names_upper:
+                knob_index_1based = knob_names_upper.index(name) + 1
+                value_byte = int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 255.0))
+                value_byte = max(0, min(255, value_byte))
+                try:
+                    self._backend.set_knob_value(knob_index_1based, value_byte)
+                except Exception:
+                    self._logger.exception(
+                        "Failed to set knob %s (idx=%s) to %s",
+                        name,
+                        knob_index_1based,
+                        value_byte,
+                    )
 
         self._knob_overrides[name] = new_raw
         self._emit_state(self._state_with_overrides())
@@ -282,9 +303,9 @@ class H9DeviceWorker(QtCore.QObject):
             if preset.knobs_by_name:
                 for name in wanted_order:
                     if name not in preset.knobs_by_name:
-                        override = self._knob_overrides.get(name)
-                        raw = int(preset.knobs_by_name[name] if override is None else override)
-                    raw = int(self._knob_overrides.get(name, preset.knobs_by_name[name]))
+                        continue
+                    override = self._knob_overrides.get(name)
+                    raw = int(preset.knobs_by_name[name] if override is None else override)
                     pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
                     pretty = format_knob_value(
                         algorithm_key=preset.algorithm_key,

@@ -29,6 +29,32 @@ class H9Backend:
     def set_bpm(self, bpm: int) -> None:
         self.set_value(H9SystemKeys.KEY_SP_TEMPO, bpm * 100)
 
+    @staticmethod
+    def knob_key(knob_index_1based: int) -> int:
+        """Return the H9 VALUE_PUT key for knob 1..10.
+
+        Per provided spec:
+        - knob1 key: 0x212
+        - knob10 key: 0x21B
+        """
+
+        if not 1 <= knob_index_1based <= 10:
+            raise ValueError("knob_index_1based must be 1..10")
+
+        # knob1 offset is 0x12, so offset = 0x11 + knob_index
+        return 0x200 + (0x11 + knob_index_1based)
+
+    def set_knob_value(self, knob_index_1based: int, value: int) -> None:
+        """Set a knob (1..10) using the Byte Parameter key scheme.
+
+        `value` is encoded as ASCII hex (e.g. 100 -> '64').
+        """
+
+        if not 0 <= value <= 0xFF:
+            raise ValueError("knob value must be 0..255")
+
+        self.set_value(self.knob_key(knob_index_1based), value)
+
     def get_value(self, key: int, *, timeout_s: float) -> int:
         key_str = f"{key:X}".encode("ascii")
         self._send_eventide(H9SysexCodes.SYSEXC_VALUE_WANT, key_str)
