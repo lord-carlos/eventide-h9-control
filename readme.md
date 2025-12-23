@@ -8,8 +8,12 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 - H9 Algorithm Guide: documentation/H9AlgorithmGuide+V12.pdf
 
 ## Todo
-- We need to be able to send out midi messages.
-- We need to find out in what order each button on each effect is. That information we might be able to find in documentaion/H9AlgorithmGuide+V12.pdf
+- Integrate live audio BPM detection.
+- Display both H9 BPM and calculated BPM from live audio input. Maybe next to each other.
+- Add a switch state, either locked BPM or continues live BPM calculation. If   locked, make a function to send the BPM to H9 one time.
+- A setting menu, fullscreen. And a way to permanently save settings. Maybe just a json? In current dir or in home dir?
+- Control keys, they need to switch preests in normal view, but change settings in the setting menu.
+
 
 ## Notes
 
@@ -21,7 +25,6 @@ Traktor delay rates:
 A minimal dashboard intended for a Raspberry Pi touchscreen.
 
 - Run on Windows (dev): `uv run python ui_main.py`
-- Run on Raspberry Pi (64-bit): `uv run python ui_main.py`
 
 Note: currently starts windowed at 720×1280 for debugging.
 
