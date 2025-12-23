@@ -10,6 +10,7 @@ from pathlib import Path
 class AudioConfig:
     input_device_id: int | None = None
     input_channels: int = 1
+    auto_bpm_mode: str = "manual"  # "manual" or "continuous"
 
 
 @dataclass
@@ -39,6 +40,7 @@ class ConfigManager:
                     audio=AudioConfig(
                         input_device_id=audio_data.get("input_device_id"),
                         input_channels=audio_data.get("input_channels", 1),
+                        auto_bpm_mode=audio_data.get("auto_bpm_mode", "manual"),
                     )
                 )
         except Exception as e:
@@ -68,4 +70,13 @@ class ConfigManager:
     @audio_input_channels.setter
     def audio_input_channels(self, value: int) -> None:
         self.config.audio.input_channels = value
+        self.save()
+
+    @property
+    def auto_bpm_mode(self) -> str:
+        return self.config.audio.auto_bpm_mode
+
+    @auto_bpm_mode.setter
+    def auto_bpm_mode(self, value: str) -> None:
+        self.config.audio.auto_bpm_mode = value
         self.save()

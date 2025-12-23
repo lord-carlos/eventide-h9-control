@@ -5,7 +5,7 @@ import argparse
 from PySide6 import QtCore, QtWidgets
 
 from h9control.app.config import ConfigManager
-from h9control.app.ui.qt_dashboard import DashboardWindow, fit_window_to_screen
+from h9control.app.ui.qt_dashboard import MainWindow, fit_window_to_screen
 from h9control.app.ui.qt_worker import H9DeviceWorker
 from h9control.audio.beat_detector import BeatDetector
 from h9control.logging_setup import configure_logging
@@ -32,24 +32,24 @@ def main() -> None:
 
     app = QtWidgets.QApplication([])
 
-    window = DashboardWindow()
+    window = MainWindow(config)
     fit_window_to_screen(window)
 
     thread = QtCore.QThread()
     worker = H9DeviceWorker(midi_channel=args.midi_channel)
     worker.moveToThread(thread)
 
-    window.connect_refresh_requested.connect(
+    window.dashboard.connect_refresh_requested.connect(
         worker.connect_or_refresh,
         QtCore.Qt.ConnectionType.QueuedConnection,
     )
-    window.next_requested.connect(worker.next_preset, QtCore.Qt.ConnectionType.QueuedConnection)
-    window.prev_requested.connect(worker.prev_preset, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.dashboard.next_requested.connect(worker.next_preset, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.dashboard.prev_requested.connect(worker.prev_preset, QtCore.Qt.ConnectionType.QueuedConnection)
 
-    window.adjust_knob_requested.connect(worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection)
-    window.adjust_bpm_requested.connect(worker.adjust_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.dashboard.adjust_knob_requested.connect(worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.dashboard.adjust_bpm_requested.connect(worker.adjust_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
 
-    worker.state_changed.connect(window.apply_state)
+    worker.state_changed.connect(window.dashboard.apply_state)
 
     beat_detector = BeatDetector(config)
     beat_detector.bpm_detected.connect(worker.update_live_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
@@ -64,7 +64,7 @@ def main() -> None:
 
     window.show()
 
-    QtCore.QTimer.singleShot(0, window.connect_refresh_requested.emit)
+    QtCore.QTimer.singleShot(0, window.dashboard.connect_refresh_requested.emit)
 
     raise SystemExit(app.exec())
 

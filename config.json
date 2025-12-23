@@ -1,0 +1,7 @@
+{
+    "audio": {
+        "input_device_id": 0,
+        "input_channels": 1,
+        "auto_bpm_mode": "manual"
+    }
+}

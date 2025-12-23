@@ -82,29 +82,26 @@ class _LabeledProgress(QtWidgets.QWidget):
         self._bar.setValue(max(0, min(100, percent)))
 
 
-class DashboardWindow(QtWidgets.QMainWindow):
+class DashboardWidget(QtWidgets.QWidget):
     connect_refresh_requested = QtCore.Signal()
     next_requested = QtCore.Signal()
     prev_requested = QtCore.Signal()
     adjust_knob_requested = QtCore.Signal(str, int)
     adjust_bpm_requested = QtCore.Signal(int)
+    settings_requested = QtCore.Signal()
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("H9 Dashboard")
-        self.resize(_DASHBOARD_SIZE)
-        self.setMinimumSize(QtCore.QSize(360, 640))
-
         fonts = _make_fonts()
-
-        root = QtWidgets.QWidget()
-        self.setCentralWidget(root)
 
         # --- widgets ---
         self._status_dot = QtWidgets.QLabel("●")
         self._status_dot.setFont(fonts.subtitle)
         self._status_dot.setFixedSize(24, 24)
         self._status_dot.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        # Make status dot clickable
+        self._status_dot.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._status_dot.mousePressEvent = lambda e: self.settings_requested.emit()
 
         self._dly_a = _LabeledProgress(fonts)
         self._dly_b = _LabeledProgress(fonts)
@@ -221,7 +218,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         bottom_layout.addWidget(self._btn_bpm, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight)
 
         # --- root layout ---
-        layout = QtWidgets.QVBoxLayout(root)
+        layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)
         layout.addWidget(top, 1)
@@ -237,7 +234,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
     def _install_shortcuts(self) -> None:
         def bind(key: str, fn: callable) -> None:
             sc = QtGui.QShortcut(QtGui.QKeySequence(key), self)
-            sc.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
+            sc.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
             sc.activated.connect(fn)
 
         bind("1", lambda: self.adjust_knob_requested.emit("DLY-A", +1))
@@ -254,6 +251,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
         bind("5", lambda: self.adjust_bpm_requested.emit(+1))
         bind("T", lambda: self.adjust_bpm_requested.emit(-1))
+
+        # Settings shortcut
+        bind("S", self.settings_requested.emit)
 
     def apply_state(self, state: DashboardState) -> None:
         self._apply_state(state)
@@ -274,10 +274,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
             self._btn_bpm.setText("— BPM")
         else:
             self._btn_bpm.setText(f"{state.bpm:.0f} BPM")
-if state.live_bpm is None:
+
+        if state.live_bpm is None:
             self._lbl_live_bpm.setText("— Live")
         else:
             self._lbl_live_bpm.setText(f"{state.live_bpm:.1f} Live")
+
 
         
         knobs_by_name = {k.name: k for k in state.knobs}
@@ -296,6 +298,37 @@ if state.live_bpm is None:
         percent = int(getattr(knob, "percent", 0))
         pretty = getattr(knob, "pretty", None)
         widget.set_state(name=name, percent=percent, pretty=pretty)
+
+
+from h9control.app.config import ConfigManager
+from h9control.app.ui.qt_settings import SettingsWidget
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self, config: ConfigManager) -> None:
+        super().__init__()
+        self.setWindowTitle("H9 Dashboard")
+        self.resize(_DASHBOARD_SIZE)
+        self.setMinimumSize(QtCore.QSize(360, 640))
+
+        self.stack = QtWidgets.QStackedWidget()
+        self.setCentralWidget(self.stack)
+
+        self.dashboard = DashboardWidget()
+        self.settings = SettingsWidget(config)
+
+        self.stack.addWidget(self.dashboard)
+        self.stack.addWidget(self.settings)
+
+        self.dashboard.settings_requested.connect(self._show_settings)
+        self.settings.back_requested.connect(self._show_dashboard)
+
+    def _show_settings(self) -> None:
+        self.stack.setCurrentWidget(self.settings)
+
+    def _show_dashboard(self) -> None:
+        self.stack.setCurrentWidget(self.dashboard)
+
 
 
 def configure_fullscreen(window: QtWidgets.QMainWindow) -> None:
