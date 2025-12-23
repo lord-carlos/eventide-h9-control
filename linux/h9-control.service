@@ -1,0 +1,17 @@
+[Unit]
+Description=Eventide H9 Control UI
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/eventide-h9-control
+# Ensure we have a runtime directory for Wayland
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+# Start labwc (Wayland compositor) and have it run our startup script
+ExecStart=/usr/bin/labwc -s /home/pi/eventide-h9-control/linux/start-app.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

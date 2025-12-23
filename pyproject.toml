@@ -1,7 +1,7 @@
 [project]
 name = "eventide-h9-control"
 version = "0.1.0"
-description = "Add your description here"
+description = "A Qt UI for the Eventide H9 effects unit."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
