@@ -123,7 +123,7 @@ class H9FullAlgorithmData:
         "DIGDLY": AlgorithmMeta(
             description="Twin delays with independent time, feedback, and filters.",
             display_names=["DIGDLY", "DIGITALDELAY", "DIGITAL DELAY"],
-            knobs=["FILTER", "SPEED", "DEPTH", "XFADE", "FBK-B", "FBK-A", "DLY-B", "DLY-A", "DLYMIX", "MIX"],
+            knobs=["MIX", "DLYMIX", "DLY-A", "DLY-B", "FBK-A", "FBK-B", "XFADE", "DEPTH", "SPEED", "FILTER"],
         ),
         "VNTAGE": AlgorithmMeta(
             description="Simulates analog and early digital delays with bit resolution control.",

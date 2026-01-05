@@ -70,3 +70,25 @@ class MidiTransport:
             raise RuntimeError("MIDI output not connected. Call connect() first.")
 
         out.send(mido.Message("program_change", program=program, channel=channel))
+
+    def send_control_change(self, control: int, value: int, channel: int = 0) -> None:
+        """Send MIDI Control Change message.
+        
+        Args:
+            control: CC number (0-127)
+            value: CC value (0-127)
+            channel: MIDI channel (0-15)
+        """
+        if control < 0 or control > 127:
+            raise ValueError("control must be 0..127")
+        if value < 0 or value > 127:
+            raise ValueError("value must be 0..127")
+        if channel < 0 or channel > 15:
+            raise ValueError("channel must be 0..15")
+
+        out = getattr(self._midi, "_out", None)
+        if out is None:
+            raise RuntimeError("MIDI output not connected. Call connect() first.")
+
+        logger.debug("TX CC: channel=%d control=%d value=%d", channel, control, value)
+        out.send(mido.Message("control_change", control=control, value=value, channel=channel))

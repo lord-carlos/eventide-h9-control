@@ -258,7 +258,8 @@ class H9DeviceWorker(QtCore.QObject):
             step = int(round(MAX_KNOB_VALUE_14BIT * 0.05))  # 5%
             new_raw = max(0, min(MAX_KNOB_VALUE_14BIT, current_raw + (step * (1 if delta > 0 else -1))))
 
-        # Try to push to device.
+        # Try to push to device via MIDI CC.
+        # H9 maps knobs to CC: Knob 1 = CC 22, Knob 2 = CC 23, ..., Knob 10 = CC 31
         if self._transport is None:
             self._connect()
         if self._transport is not None and algo_key:
@@ -266,16 +267,23 @@ class H9DeviceWorker(QtCore.QObject):
             knob_names_upper = [k.upper() for k in knob_names]
             if name in knob_names_upper:
                 knob_index_1based = knob_names_upper.index(name) + 1
-                value_byte = int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 255.0))
-                value_byte = max(0, min(255, value_byte))
+                cc_number = 21 + knob_index_1based  # CC 22 for knob 1, CC 31 for knob 10
+                # Convert 14-bit raw value to 7-bit MIDI CC value (0-127)
+                cc_value = int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 127.0))
+                cc_value = max(0, min(127, cc_value))
                 try:
-                    self._backend.set_knob_value(knob_index_1based, value_byte)
+                    self._transport.send_control_change(
+                        control=cc_number,
+                        value=cc_value,
+                        channel=self._midi_channel,
+                    )
                 except Exception:
                     self._logger.exception(
-                        "Failed to set knob %s (idx=%s) to %s",
+                        "Failed to send CC for knob %s (idx=%s, CC=%d, value=%d)",
                         name,
                         knob_index_1based,
-                        value_byte,
+                        cc_number,
+                        cc_value,
                     )
 
         self._knob_overrides[name] = new_raw
