@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from h9control.app.state import DashboardState
 
 
-_DASHBOARD_SIZE = QtCore.QSize(720, 1280)
+_DASHBOARD_SIZE = QtCore.QSize(1280, 720)
 
 
 @dataclass(frozen=True)
