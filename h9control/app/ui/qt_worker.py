@@ -217,6 +217,28 @@ class H9DeviceWorker(QtCore.QObject):
         # Re-read state so UI stays in sync with the pedal.
         self._refresh_state()
 
+    @QtCore.Slot()
+    def sync_live_bpm(self) -> None:
+        if self._transport is None:
+            self._connect()
+        if self._transport is None:
+            return
+
+        if self._live_bpm is None:
+            return
+
+        target = int(round(self._live_bpm))
+        target = max(20, min(300, target))
+
+        try:
+            self._backend.set_bpm(target)
+        except Exception:
+            self._logger.exception("Failed to set BPM")
+            return
+
+        # Re-read state so UI stays in sync with the pedal.
+        self._refresh_state()
+
     def _sanitize_bpm(self, bpm: float | None) -> float | None:
         if bpm is None:
             return self._last_good_bpm

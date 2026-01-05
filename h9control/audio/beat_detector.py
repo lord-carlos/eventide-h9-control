@@ -28,10 +28,13 @@ class BeatDetector(QObject):
         self._stop_event = threading.Event()
 
         # Audio parameters
-        self.buffer_size = 512
-        self.window_multiple = 4
+        self.buffer_size = 64
+        self.window_multiple = 32
         self.format = pyaudio.paFloat32
         # We might need to adjust channels based on device capabilities, but config has preference
+        
+        #Ugly hack
+        self.BPM_CALIBRATION = 0.9974
         
         self.p = pyaudio.PyAudio()
         self.stream: pyaudio.Stream | None = None
@@ -140,7 +143,7 @@ class BeatDetector(QObject):
 
         if self.bpm_estimates:
             median_bpm = float(np.median(self.bpm_estimates))
-            self.bpm_detected.emit(round(median_bpm, 1))
+            self.bpm_detected.emit(round(median_bpm * self.BPM_CALIBRATION, 1))
 
     def __del__(self) -> None:
         self.p.terminate()

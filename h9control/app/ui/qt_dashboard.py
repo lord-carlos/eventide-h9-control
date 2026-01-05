@@ -88,6 +88,7 @@ class DashboardWidget(QtWidgets.QWidget):
     prev_requested = QtCore.Signal()
     adjust_knob_requested = QtCore.Signal(str, int)
     adjust_bpm_requested = QtCore.Signal(int)
+    sync_live_bpm_requested = QtCore.Signal()
     settings_requested = QtCore.Signal()
 
     def __init__(self) -> None:
@@ -251,6 +252,7 @@ class DashboardWidget(QtWidgets.QWidget):
 
         bind("5", lambda: self.adjust_bpm_requested.emit(+1))
         bind("T", lambda: self.adjust_bpm_requested.emit(-1))
+        bind("D", self.sync_live_bpm_requested.emit)
 
         # Settings shortcut
         bind("S", self.settings_requested.emit)

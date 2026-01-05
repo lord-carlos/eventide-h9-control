@@ -5,6 +5,7 @@ description = "A Qt UI for the Eventide H9 effects unit."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aubio>=0.4.9",
     "mido>=1.3.3",
     "numpy>=2.4.0",
     "pyaudio>=0.2.14",
