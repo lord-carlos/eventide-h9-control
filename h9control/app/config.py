@@ -14,8 +14,50 @@ class AudioConfig:
 
 
 @dataclass
+class GpioBindingConfig:
+    pin: int
+    pull: str | None = "up"  # "up", "down", None
+    edge: str = "falling"  # "rising", "falling", "both"
+    debounce_ms: int = 50
+    hold_threshold_ms: int = 500  # Time to distinguish tap from hold
+
+
+@dataclass
+class ShortcutsConfig:
+    # Maps action names to list of key sequences. Each action can have multiple keys.
+    # Each key can appear in multiple actions (one key → multiple actions).
+    keyboard: dict[str, list[str]] = field(default_factory=dict)
+    
+    # Maps action names to GPIO config. Each pin can only bind to one action,
+    # but actions can have both "tap" and "hold" variants (e.g., "next_preset" and "next_preset_hold").
+    gpio: dict[str, GpioBindingConfig] = field(default_factory=dict)
+
+    @classmethod
+    def default(cls) -> ShortcutsConfig:
+        # Default keyboard shortcuts matching current hardcoded bindings
+        return cls(
+            keyboard={
+                "adjust_dly_a_up": ["1"],
+                "adjust_dly_a_down": ["Q"],
+                "adjust_dly_b_up": ["2"],
+                "adjust_dly_b_down": ["W"],
+                "adjust_fbk_a_up": ["3"],
+                "adjust_fbk_a_down": ["E"],
+                "adjust_fbk_b_up": ["4"],
+                "adjust_fbk_b_down": ["R"],
+                "adjust_bpm_up": ["5"],
+                "adjust_bpm_down": ["T"],
+                "sync_live_bpm": ["D"],
+                "settings": ["S"],
+            },
+            gpio={},
+        )
+
+
+@dataclass
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
+    shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig.default)
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -35,14 +77,35 @@ class ConfigManager:
         try:
             with open(self.config_path, "r") as f:
                 data = json.load(f)
+                
                 audio_data = data.get("audio", {})
-                return AppConfig(
-                    audio=AudioConfig(
-                        input_device_id=audio_data.get("input_device_id"),
-                        input_channels=audio_data.get("input_channels", 1),
-                        auto_bpm_mode=audio_data.get("auto_bpm_mode", "manual"),
-                    )
+                audio_config = AudioConfig(
+                    input_device_id=audio_data.get("input_device_id"),
+                    input_channels=audio_data.get("input_channels", 1),
+                    auto_bpm_mode=audio_data.get("auto_bpm_mode", "manual"),
                 )
+                
+                shortcuts_data = data.get("shortcuts", {})
+                keyboard_data = shortcuts_data.get("keyboard", {})
+                gpio_data = shortcuts_data.get("gpio", {})
+                
+                # Parse GPIO bindings
+                gpio_bindings = {}
+                for action, gpio_cfg in gpio_data.items():
+                    gpio_bindings[action] = GpioBindingConfig(
+                        pin=gpio_cfg["pin"],
+                        pull=gpio_cfg.get("pull", "up"),
+                        edge=gpio_cfg.get("edge", "falling"),
+                        debounce_ms=gpio_cfg.get("debounce_ms", 50),
+                        hold_threshold_ms=gpio_cfg.get("hold_threshold_ms", 500),
+                    )
+                
+                shortcuts_config = ShortcutsConfig(
+                    keyboard=keyboard_data if keyboard_data else ShortcutsConfig.default().keyboard,
+                    gpio=gpio_bindings,
+                )
+                
+                return AppConfig(audio=audio_config, shortcuts=shortcuts_config)
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
             return AppConfig.default()

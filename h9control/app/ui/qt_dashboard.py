@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState
 
 
@@ -91,8 +93,9 @@ class DashboardWidget(QtWidgets.QWidget):
     sync_live_bpm_requested = QtCore.Signal()
     settings_requested = QtCore.Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, config: ConfigManager | None = None) -> None:
         super().__init__()
+        self._config = config
         fonts = _make_fonts()
 
         # --- widgets ---
@@ -233,29 +236,56 @@ class DashboardWidget(QtWidgets.QWidget):
         self._install_shortcuts()
 
     def _install_shortcuts(self) -> None:
-        def bind(key: str, fn: callable) -> None:
-            sc = QtGui.QShortcut(QtGui.QKeySequence(key), self)
+        # Map action names to callables that trigger signals
+        action_map: dict[str, Callable[[], None]] = {
+            "next_preset": lambda: self.next_requested.emit(),
+            "prev_preset": lambda: self.prev_requested.emit(),
+            "connect_refresh": lambda: self.connect_refresh_requested.emit(),
+            "settings": lambda: self.settings_requested.emit(),
+            "sync_live_bpm": lambda: self.sync_live_bpm_requested.emit(),
+            "adjust_bpm_up": lambda: self.adjust_bpm_requested.emit(+1),
+            "adjust_bpm_down": lambda: self.adjust_bpm_requested.emit(-1),
+            "adjust_dly_a_up": lambda: self.adjust_knob_requested.emit("DLY-A", +1),
+            "adjust_dly_a_down": lambda: self.adjust_knob_requested.emit("DLY-A", -1),
+            "adjust_dly_b_up": lambda: self.adjust_knob_requested.emit("DLY-B", +1),
+            "adjust_dly_b_down": lambda: self.adjust_knob_requested.emit("DLY-B", -1),
+            "adjust_fbk_a_up": lambda: self.adjust_knob_requested.emit("FBK-A", +1),
+            "adjust_fbk_a_down": lambda: self.adjust_knob_requested.emit("FBK-A", -1),
+            "adjust_fbk_b_up": lambda: self.adjust_knob_requested.emit("FBK-B", +1),
+            "adjust_fbk_b_down": lambda: self.adjust_knob_requested.emit("FBK-B", -1),
+        }
+
+        # Get keyboard shortcuts from config or use empty dict if no config
+        keyboard_shortcuts = {}
+        if self._config is not None:
+            keyboard_shortcuts = self._config.config.shortcuts.keyboard
+
+        # Build a map: key_sequence -> list of actions
+        # This supports one key triggering multiple actions
+        key_to_actions: dict[str, list[Callable[[], None]]] = {}
+        for action_name, key_sequences in keyboard_shortcuts.items():
+            handler = action_map.get(action_name)
+            if handler is None:
+                continue  # Unknown action, skip
+            
+            for key_seq in key_sequences:
+                if key_seq not in key_to_actions:
+                    key_to_actions[key_seq] = []
+                key_to_actions[key_seq].append(handler)
+
+        # Create QShortcut for each unique key, triggering all bound actions
+        for key_seq, handlers in key_to_actions.items():
+            sc = QtGui.QShortcut(QtGui.QKeySequence(key_seq), self)
             sc.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
-            sc.activated.connect(fn)
-
-        bind("1", lambda: self.adjust_knob_requested.emit("DLY-A", +1))
-        bind("Q", lambda: self.adjust_knob_requested.emit("DLY-A", -1))
-
-        bind("2", lambda: self.adjust_knob_requested.emit("DLY-B", +1))
-        bind("W", lambda: self.adjust_knob_requested.emit("DLY-B", -1))
-
-        bind("3", lambda: self.adjust_knob_requested.emit("FBK-A", +1))
-        bind("E", lambda: self.adjust_knob_requested.emit("FBK-A", -1))
-
-        bind("4", lambda: self.adjust_knob_requested.emit("FBK-B", +1))
-        bind("R", lambda: self.adjust_knob_requested.emit("FBK-B", -1))
-
-        bind("5", lambda: self.adjust_bpm_requested.emit(+1))
-        bind("T", lambda: self.adjust_bpm_requested.emit(-1))
-        bind("D", self.sync_live_bpm_requested.emit)
-
-        # Settings shortcut
-        bind("S", self.settings_requested.emit)
+            
+            # Trigger all actions bound to this key
+            def make_multi_handler(funcs: list[Callable[[], None]]) -> Callable[[], None]:
+                def multi_handler() -> None:
+                    for func in funcs:
+                        func()
+                return multi_handler
+            
+            sc.activated.connect(make_multi_handler(handlers))
 
     def apply_state(self, state: DashboardState) -> None:
         self._apply_state(state)
@@ -316,7 +346,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stack)
 
-        self.dashboard = DashboardWidget()
+        self.dashboard = DashboardWidget(config)
         self.settings = SettingsWidget(config)
 
         self.stack.addWidget(self.dashboard)

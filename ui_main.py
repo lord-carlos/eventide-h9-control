@@ -36,7 +36,7 @@ def main() -> None:
     fit_window_to_screen(window)
 
     thread = QtCore.QThread()
-    worker = H9DeviceWorker(midi_channel=args.midi_channel)
+    worker = H9DeviceWorker(config=config, midi_channel=args.midi_channel)
     worker.moveToThread(thread)
 
     window.dashboard.connect_refresh_requested.connect(

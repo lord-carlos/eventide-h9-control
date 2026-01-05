@@ -29,6 +29,29 @@ A minimal dashboard intended for a Raspberry Pi touchscreen.
 
 Note: currently starts windowed at 720×1280 for debugging.
 
+### Keyboard Shortcuts
+
+All keyboard shortcuts are configurable in `config.json`. Default bindings:
+
+- **Preset navigation**: `Left`/`Right` arrows or `P`/`N`
+- **Knob adjustment**: `1`/`Q` (DLY-A), `2`/`W` (DLY-B), `3`/`E` (FBK-A), `4`/`R` (FBK-B)
+- **BPM control**: `5`/`T` (+/- BPM), `D` (sync live BPM)
+- **Settings**: `S`
+
+See [documentation/shortcuts-configuration.md](documentation/shortcuts-configuration.md) for full customization options.
+
+### GPIO Hardware Buttons (Raspberry Pi)
+
+GPIO button support is available for Raspberry Pi hardware buttons. Install the GPIO library:
+
+```bash
+uv add gpiozero
+```
+
+Configure GPIO pins in `config.json` - see `config.example-with-gpio.json` for examples. Each button supports both tap and hold actions (e.g., tap for next preset, hold for settings).
+
+Full documentation: [documentation/shortcuts-configuration.md](documentation/shortcuts-configuration.md)
+
 Controls:
 - `Connect / Refresh` fetches preset + BPM.
 - `◀` / `▶` sends Program Change (prev/next) and re-reads state.

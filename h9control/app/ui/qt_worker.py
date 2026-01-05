@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from PySide6 import QtCore
 
+from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
 from h9control.domain.algorithms import H9FullAlgorithmData
@@ -18,6 +19,7 @@ from h9control.protocol.codes import H9SysexCodes
 from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
 from h9control.protocol.sysex import SysexFrame, build_eventide_sysex, decode_eventide_sysex
 from h9control.transport.midi_transport import MidiTransport
+from h9control.transport.gpio_input import GpioInputManager
 from midi import H9Midi
 
 
@@ -76,6 +78,7 @@ class H9DeviceWorker(QtCore.QObject):
     def __init__(
         self,
         *,
+        config: ConfigManager,
         device_prefix: str = "H9 Pedal",
         device_id: int = 1,
         midi_channel: int = 0,
@@ -83,6 +86,7 @@ class H9DeviceWorker(QtCore.QObject):
         super().__init__()
         self._logger = logging.getLogger(self.__class__.__name__)
 
+        self._config = config
         self._device_prefix = device_prefix
         self._device_id = device_id
         self._midi_channel = midi_channel
@@ -90,6 +94,7 @@ class H9DeviceWorker(QtCore.QObject):
         self._midi: H9Midi | None = None
         self._transport: MidiTransport | None = None
         self._connected_device_id: int = device_id
+        self._gpio: GpioInputManager = GpioInputManager()
 
         self._rx_thread: threading.Thread | None = None
         self._rx_stop = threading.Event()
@@ -118,6 +123,88 @@ class H9DeviceWorker(QtCore.QObject):
             wait_for_frame=lambda predicate, timeout_s: self._wait_for_frame(
                 predicate, timeout_s=timeout_s
             ),
+        )
+
+        self._setup_gpio_bindings()
+
+    def _setup_gpio_bindings(self) -> None:
+        """Load GPIO bindings from config and wire them to Qt signals.
+        
+        GPIO actions can have both tap and hold variants:
+        - "action_name" -> fires on short press (tap)
+        - "action_name_hold" -> fires on long press (hold)
+        """
+        if not self._gpio.is_available():
+            self._logger.info("GPIO not available, skipping GPIO bindings")
+            return
+
+        gpio_config = self._config.config.shortcuts.gpio
+        if not gpio_config:
+            self._logger.info("No GPIO bindings configured")
+            return
+
+        # Map action names to callables
+        action_map: dict[str, Callable[[], None]] = {
+            "next_preset": lambda: self._invoke_on_main_thread(self.next_preset),
+            "prev_preset": lambda: self._invoke_on_main_thread(self.prev_preset),
+            "connect_refresh": lambda: self._invoke_on_main_thread(self.connect_or_refresh),
+            "sync_live_bpm": lambda: self._invoke_on_main_thread(self.sync_live_bpm),
+            "adjust_bpm_up": lambda: self._invoke_on_main_thread(self.adjust_bpm, 1),
+            "adjust_bpm_down": lambda: self._invoke_on_main_thread(self.adjust_bpm, -1),
+            "adjust_dly_a_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-A", 1),
+            "adjust_dly_a_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-A", -1),
+            "adjust_dly_b_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-B", 1),
+            "adjust_dly_b_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-B", -1),
+            "adjust_fbk_a_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-A", 1),
+            "adjust_fbk_a_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-A", -1),
+            "adjust_fbk_b_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-B", 1),
+            "adjust_fbk_b_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-B", -1),
+        }
+
+        # Group actions by pin (tap vs hold variants)
+        pin_actions: dict[int, dict] = {}
+        for action_name, gpio_cfg in gpio_config.items():
+            pin = gpio_cfg.pin
+            
+            # Check if this is a "hold" variant
+            is_hold = action_name.endswith("_hold")
+            base_action = action_name[:-5] if is_hold else action_name
+            
+            handler = action_map.get(base_action)
+            if handler is None:
+                self._logger.warning(f"Unknown GPIO action: {action_name}")
+                continue
+            
+            if pin not in pin_actions:
+                pin_actions[pin] = {
+                    "tap": None,
+                    "hold": None,
+                    "config": gpio_cfg,
+                }
+            
+            if is_hold:
+                pin_actions[pin]["hold"] = handler
+            else:
+                pin_actions[pin]["tap"] = handler
+
+        # Bind each pin with its tap/hold actions
+        for pin, actions in pin_actions.items():
+            cfg = actions["config"]
+            self._gpio.bind_action(
+                pin=pin,
+                tap_action=actions["tap"],
+                hold_action=actions["hold"],
+                pull_up=(cfg.pull == "up"),
+                debounce_ms=cfg.debounce_ms,
+                hold_threshold_ms=cfg.hold_threshold_ms,
+            )
+
+    def _invoke_on_main_thread(self, method: Callable, *args) -> None:
+        """Invoke a Qt slot on the main thread from GPIO callback."""
+        QtCore.QMetaObject.invokeMethod(
+            self,
+            lambda: method(*args),
+            QtCore.Qt.ConnectionType.QueuedConnection,
         )
 
     @QtCore.Slot()
@@ -257,6 +344,8 @@ class H9DeviceWorker(QtCore.QObject):
 
     @QtCore.Slot()
     def shutdown(self) -> None:
+        self._gpio.unbind_all()
+        
         self._rx_stop.set()
         if self._rx_thread is not None and self._rx_thread.is_alive():
             self._rx_thread.join(timeout=1.0)
