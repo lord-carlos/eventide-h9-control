@@ -117,6 +117,7 @@ class H9DeviceWorker(QtCore.QObject):
         self._knob_overrides: dict[str, int] = {}
         self._last_good_bpm: float | None = None
         self._live_bpm: float | None = None
+        self._last_sent_auto_bpm: int | None = None
 
         self._backend = H9Backend(
             send_eventide=self._send_eventide,
@@ -327,12 +328,45 @@ class H9DeviceWorker(QtCore.QObject):
 
         try:
             self._backend.set_bpm(target)
+            self._last_sent_auto_bpm = target
         except Exception:
             self._logger.exception("Failed to set BPM")
             return
 
         # Re-read state so UI stays in sync with the pedal.
         self._refresh_state()
+
+    def _check_auto_bpm_sync(self) -> int | None:
+        """Check if auto BPM sync should fire and send BPM if needed.
+        
+        Returns the newly sent BPM value if successful, None otherwise.
+        """
+        if self._config.auto_bpm_mode != "continuous":
+            return None
+        
+        if self._live_bpm is None:
+            return None
+        
+        if self._transport is None:
+            return None
+        
+        rounded_bpm = int(round(self._live_bpm))
+        
+        # Only send if the rounded value has changed
+        if rounded_bpm == self._last_sent_auto_bpm:
+            return None
+        
+        # Clamp to valid range
+        target = max(20, min(300, rounded_bpm))
+        
+        try:
+            self._backend.set_bpm(target)
+            self._last_sent_auto_bpm = target
+            self._logger.info(f"Auto-synced BPM: {target}")
+            return target
+        except Exception:
+            self._logger.exception("Failed to auto-sync BPM")
+            return None
 
     def _sanitize_bpm(self, bpm: float | None) -> float | None:
         if bpm is None:
@@ -398,6 +432,7 @@ class H9DeviceWorker(QtCore.QObject):
 
     def _refresh_state(self) -> None:
         try:
+            self._logger.debug(f"_refresh_state called")
             preset = self._request_current_program(timeout_s=2.0)
 
             # If the preset changed, drop any UI overrides.
@@ -501,6 +536,10 @@ class H9DeviceWorker(QtCore.QObject):
     def _emit_state(self, state: DashboardState) -> None:
         if state.live_bpm != self._live_bpm:
             state = dataclasses.replace(state, live_bpm=self._live_bpm)
+            # Check if auto-sync sent a new BPM and update state accordingly
+            new_bpm = self._check_auto_bpm_sync()
+            if new_bpm is not None:
+                state = dataclasses.replace(state, bpm=float(new_bpm))
         self._last_state = state
         self.state_changed.emit(state)
 
