@@ -9,34 +9,71 @@ from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState
 
 
+# === CONFIGURATION CONSTANTS ===
+
+# Window
 _DASHBOARD_SIZE = QtCore.QSize(1280, 720)
+
+# Typography (point sizes)
+_FONT_SIZE_TITLE = 36  # Preset name
+_FONT_SIZE_SUBTITLE = 22  # Algorithm, knob labels
+_FONT_SIZE_VALUE = 20  # BPM/Live numbers
+_FONT_SIZE_LABEL = 12  # "BPM"/"Live" text
+_FONT_SIZE_RAW_VALUE = 11  # Raw value below progress bar
+
+# Layout spacing & margins
+_ROOT_MARGIN = 32  # Outer margin around entire dashboard
+_SECTION_SPACING = 24  # Vertical spacing between sections
+_KNOB_GROUP_SPACING = 32  # Horizontal spacing between DLY-A/B and FBK-A/B
+_KNOB_INTERNAL_SPACING = 12  # Vertical spacing inside knob widget (label -> bar -> value)
+
+# Layout stretch factors (vertical proportions)
+_STRETCH_TOP = 1  # Top section (DLY knobs)
+_STRETCH_CENTER = 2  # Center section (preset/algorithm)
+_STRETCH_BOTTOM = 1  # Bottom section (FBK knobs + BPM)
+_STRETCH_CENTER_TEXT_TOP = 1  # Stretch above preset name
+_STRETCH_CENTER_TEXT_BOTTOM = 1  # Stretch below algorithm
+
+# Widget dimensions
+_PROGRESS_BAR_HEIGHT = 18  # Progress bar thickness
+_BUTTON_PREV_NEXT_WIDTH = 120  # Width of ◀/▶ buttons
+_BUTTON_PREV_NEXT_HEIGHT = 120  # Height of ◀/▶ buttons
+_BUTTON_BPM_WIDTH = 180  # Width of BPM button
+_BUTTON_BPM_HEIGHT = 90  # Height of BPM button
+_STATUS_DOT_SIZE = 32  # Status indicator dot
 
 
 @dataclass(frozen=True)
 class _Fonts:
-    title: QtGui.QFont
-    subtitle: QtGui.QFont
-    normal: QtGui.QFont
-    bar: QtGui.QFont
+    title: QtGui.QFont  # Preset name
+    subtitle: QtGui.QFont  # Algorithm, knob labels
+    value: QtGui.QFont  # BPM/Live numbers
+    label: QtGui.QFont  # "BPM"/"Live" text
+    raw_value: QtGui.QFont  # Raw value below progress bar
 
 
 def _make_fonts() -> _Fonts:
     title = QtGui.QFont()
-    title.setPointSize(28)
+    title.setPointSize(_FONT_SIZE_TITLE)
     title.setBold(True)
 
     subtitle = QtGui.QFont()
-    subtitle.setPointSize(18)
+    subtitle.setPointSize(_FONT_SIZE_SUBTITLE)
     subtitle.setBold(True)
 
-    normal = QtGui.QFont()
-    normal.setPointSize(14)
+    value = QtGui.QFont()
+    value.setPointSize(_FONT_SIZE_VALUE)
+    value.setBold(True)
 
-    bar = QtGui.QFont("Courier New")
-    bar.setPointSize(16)
-    bar.setBold(True)
+    label = QtGui.QFont()
+    label.setPointSize(_FONT_SIZE_LABEL)
+    label.setBold(False)
 
-    return _Fonts(title=title, subtitle=subtitle, normal=normal, bar=bar)
+    raw_value = QtGui.QFont()
+    raw_value.setPointSize(_FONT_SIZE_RAW_VALUE)
+    raw_value.setBold(False)
+
+    return _Fonts(title=title, subtitle=subtitle, value=value, label=label, raw_value=raw_value)
 
 
 class _LabeledProgress(QtWidgets.QWidget):
@@ -50,9 +87,8 @@ class _LabeledProgress(QtWidgets.QWidget):
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
         self._bar.setTextVisible(False)
-        bar_height = 12
-        self._bar.setFixedHeight(bar_height)
-        radius = bar_height // 2
+        self._bar.setFixedHeight(_PROGRESS_BAR_HEIGHT)
+        radius = _PROGRESS_BAR_HEIGHT // 2
         self._bar.setStyleSheet(
             "\n".join(
                 (
@@ -69,53 +105,67 @@ class _LabeledProgress(QtWidgets.QWidget):
             )
         )
 
+        self._raw_value = QtWidgets.QLabel("")
+        self._raw_value.setFont(fonts.raw_value)
+        self._raw_value.setStyleSheet("color: #888;")
+        self._raw_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(_KNOB_INTERNAL_SPACING)
         layout.addWidget(self._label)
         layout.addWidget(self._bar)
+        layout.addWidget(self._raw_value)
 
-    def set_state(self, *, name: str, percent: int, pretty: str | None) -> None:
+    def set_state(self, *, name: str, percent: int, pretty: str | None, raw_value: int | None = None) -> None:
         if pretty:
             # Example: "DLY-A  1/8 note" -> user-friendly label
             self._label.setText(f"{name}  {pretty}")
         else:
             self._label.setText(name)
         self._bar.setValue(max(0, min(100, percent)))
+        
+        if raw_value is not None:
+            self._raw_value.setText(f"{raw_value}")
+        else:
+            self._raw_value.setText("")
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable or disable the widget (grayed out when disabled)."""
         self.setEnabled(enabled)
+        radius = _PROGRESS_BAR_HEIGHT // 2
         if enabled:
             self._label.setStyleSheet("")
+            self._raw_value.setStyleSheet("color: #888;")
             self._bar.setStyleSheet(
                 "\n".join(
                     (
                         "QProgressBar {",
                         "  border: 0px;",
                         "  background: palette(mid);",
-                        f"  border-radius: {self._bar.height() // 2}px;",
+                        f"  border-radius: {radius}px;",
                         "}",
                         "QProgressBar::chunk {",
                         "  background: palette(highlight);",
-                        f"  border-radius: {self._bar.height() // 2}px;",
+                        f"  border-radius: {radius}px;",
                         "}",
                     )
                 )
             )
         else:
             self._label.setStyleSheet("color: #888;")
+            self._raw_value.setStyleSheet("color: #555;")
             self._bar.setStyleSheet(
                 "\n".join(
                     (
                         "QProgressBar {",
                         "  border: 0px;",
                         "  background: #444;",
-                        f"  border-radius: {self._bar.height() // 2}px;",
+                        f"  border-radius: {radius}px;",
                         "}",
                         "QProgressBar::chunk {",
                         "  background: #666;",
-                        f"  border-radius: {self._bar.height() // 2}px;",
+                        f"  border-radius: {radius}px;",
                         "}",
                     )
                 )
@@ -138,9 +188,8 @@ class DashboardWidget(QtWidgets.QWidget):
         # --- widgets ---
         self._status_dot = QtWidgets.QLabel("●")
         self._status_dot.setFont(fonts.subtitle)
-        self._status_dot.setFixedSize(24, 24)
+        self._status_dot.setFixedSize(_STATUS_DOT_SIZE, _STATUS_DOT_SIZE)
         self._status_dot.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        # Make status dot clickable
         self._status_dot.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._status_dot.mousePressEvent = lambda e: self.settings_requested.emit()
 
@@ -159,26 +208,27 @@ class DashboardWidget(QtWidgets.QWidget):
 
         self._btn_prev = QtWidgets.QPushButton("◀")
         self._btn_prev.setFont(fonts.title)
-        self._btn_prev.setFixedWidth(90)
+        self._btn_prev.setFixedSize(_BUTTON_PREV_NEXT_WIDTH, _BUTTON_PREV_NEXT_HEIGHT)
         self._btn_prev.clicked.connect(self.prev_requested.emit)
 
         self._btn_next = QtWidgets.QPushButton("▶")
         self._btn_next.setFont(fonts.title)
-        self._btn_next.setFixedWidth(90)
+        self._btn_next.setFixedSize(_BUTTON_PREV_NEXT_WIDTH, _BUTTON_PREV_NEXT_HEIGHT)
         self._btn_next.clicked.connect(self.next_requested.emit)
 
         self._btn_bpm = QtWidgets.QPushButton("— BPM")
-        self._btn_bpm.setFont(fonts.subtitle)
-        self._btn_bpm.setFixedHeight(70)
-        self._btn_bpm.setFixedWidth(160)
+        self._btn_bpm.setFont(fonts.value)
+        self._btn_bpm.setFixedSize(_BUTTON_BPM_WIDTH, _BUTTON_BPM_HEIGHT)
         self._btn_bpm.clicked.connect(self.connect_refresh_requested.emit)
 
         self._lbl_live_bpm = QtWidgets.QLabel("— Live")
-        self._lbl_live_bpm.setFont(fonts.subtitle)
-        self._lbl_live_bpm.setFixedHeight(70)
-        self._lbl_live_bpm.setFixedWidth(160)
+        self._lbl_live_bpm.setFont(fonts.value)
+        self._lbl_live_bpm.setFixedSize(_BUTTON_BPM_WIDTH, _BUTTON_BPM_HEIGHT)
         self._lbl_live_bpm.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._lbl_live_bpm.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self._lbl_live_bpm.setStyleSheet("border: 1px solid #444; border-radius: 4px;")
+
+        self._fonts = fonts
 
         top_line = QtWidgets.QFrame()
         top_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
@@ -188,22 +238,23 @@ class DashboardWidget(QtWidgets.QWidget):
         bottom_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         bottom_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
 
-        # --- top (25%) ---
+        # --- top section ---
         top = QtWidgets.QWidget()
         top_layout = QtWidgets.QVBoxLayout(top)
         top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(12)
+        top_layout.setSpacing(0)
 
-        # One row: DLY-A + DLY-B centered-ish, status dot on far right.
         dly_row = QtWidgets.QHBoxLayout()
-        dly_row.setSpacing(24)
+        dly_row.setSpacing(_KNOB_GROUP_SPACING)
 
         dly_group = QtWidgets.QWidget()
         dly_group_layout = QtWidgets.QHBoxLayout(dly_group)
         dly_group_layout.setContentsMargins(0, 0, 0, 0)
-        dly_group_layout.setSpacing(24)
+        dly_group_layout.setSpacing(_KNOB_GROUP_SPACING)
         dly_group_layout.addWidget(self._dly_a, 1)
         dly_group_layout.addWidget(self._dly_b, 1)
+        # Store reference to ensure FBK group matches this width
+        self._dly_group = dly_group
 
         top_right = QtWidgets.QWidget()
         top_right.setFixedWidth(self._btn_bpm.width())
@@ -218,20 +269,20 @@ class DashboardWidget(QtWidgets.QWidget):
         dly_row.addWidget(top_right, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight)
         top_layout.addLayout(dly_row)
 
-        # --- center (50%) ---
+        # --- center section ---
         center = QtWidgets.QWidget()
         center_layout = QtWidgets.QHBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(12)
+        center_layout.setSpacing(_SECTION_SPACING)
 
         mid_text = QtWidgets.QWidget()
         mid_text_layout = QtWidgets.QVBoxLayout(mid_text)
         mid_text_layout.setContentsMargins(0, 0, 0, 0)
-        mid_text_layout.setSpacing(10)
-        mid_text_layout.addStretch(2)
+        mid_text_layout.setSpacing(16)
+        mid_text_layout.addStretch(_STRETCH_CENTER_TEXT_TOP)
         mid_text_layout.addWidget(self._preset_name)
         mid_text_layout.addWidget(self._algorithm_key)
-        mid_text_layout.addStretch(3)
+        mid_text_layout.addStretch(_STRETCH_CENTER_TEXT_BOTTOM)
 
         center_layout.addWidget(self._btn_prev, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter)
         center_layout.addStretch(1)
@@ -239,38 +290,50 @@ class DashboardWidget(QtWidgets.QWidget):
         center_layout.addStretch(1)
         center_layout.addWidget(self._btn_next, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter)
 
-        # --- bottom (25%) ---
+        # --- bottom section ---
         bottom = QtWidgets.QWidget()
         bottom_layout = QtWidgets.QHBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
-        bottom_layout.setSpacing(24)
+        bottom_layout.setSpacing(0)
 
         fbk_group = QtWidgets.QWidget()
         fbk_group_layout = QtWidgets.QHBoxLayout(fbk_group)
         fbk_group_layout.setContentsMargins(0, 0, 0, 0)
-        fbk_group_layout.setSpacing(24)
+        fbk_group_layout.setSpacing(_KNOB_GROUP_SPACING)
         fbk_group_layout.addWidget(self._fbk_a, 1)
         fbk_group_layout.addWidget(self._fbk_b, 1)
+        # Store reference to sync width with DLY group
+        self._fbk_group = fbk_group
 
-        # Left-bound group (~50% width), empty spacer, then BPM button.
         bottom_layout.addWidget(fbk_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
         bottom_layout.addStretch(1)
         bottom_layout.addWidget(self._lbl_live_bpm, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight)
+        bottom_layout.addSpacing(_KNOB_GROUP_SPACING)
         bottom_layout.addWidget(self._btn_bpm, 0, alignment=QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight)
 
         # --- root layout ---
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(18)
-        layout.addWidget(top, 1)
+        layout.setContentsMargins(_ROOT_MARGIN, _ROOT_MARGIN, _ROOT_MARGIN, _ROOT_MARGIN)
+        layout.setSpacing(_SECTION_SPACING)
+        layout.addWidget(top, _STRETCH_TOP)
         layout.addWidget(top_line)
-        layout.addWidget(center, 2)
+        layout.addWidget(center, _STRETCH_CENTER)
         layout.addWidget(bottom_line)
-        layout.addWidget(bottom, 1)
+        layout.addWidget(bottom, _STRETCH_BOTTOM)
 
         self._apply_state(DashboardState(connected=False, status_text="Disconnected"))
 
         self._install_shortcuts()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        """Keep DLY and FBK groups the same width."""
+        super().resizeEvent(event)
+        # Match FBK group width to DLY group width
+        if hasattr(self, '_dly_group') and hasattr(self, '_fbk_group'):
+            dly_width = self._dly_group.width()
+            if dly_width > 0:
+                self._fbk_group.setMaximumWidth(dly_width)
+                self._fbk_group.setMinimumWidth(dly_width)
 
     def _install_shortcuts(self) -> None:
         # Map action names to callables that trigger signals
@@ -338,16 +401,17 @@ class DashboardWidget(QtWidgets.QWidget):
         self._preset_name.setText(state.preset_name or "—")
         self._algorithm_key.setText(state.algorithm_key or "—")
 
-        # bottom-right BPM button
+        # BPM displays (buttons don't support rich text, so use simpler formatting)
         if state.bpm is None:
             self._btn_bpm.setText("— BPM")
         else:
             self._btn_bpm.setText(f"{state.bpm:.0f} BPM")
 
         if state.live_bpm is None:
-            self._lbl_live_bpm.setText("— Live")
+            self._lbl_live_bpm.setText("—")
         else:
-            self._lbl_live_bpm.setText(f"{state.live_bpm:.1f} Live")
+            live_html = f'<span style="font-size:{_FONT_SIZE_VALUE}pt; font-weight:bold;">{state.live_bpm:.1f}</span> <span style="font-size:{_FONT_SIZE_LABEL}pt;">Live</span>'
+            self._lbl_live_bpm.setText(live_html)
 
 
         
@@ -366,7 +430,8 @@ class DashboardWidget(QtWidgets.QWidget):
         name = getattr(knob, "name", fallback_label)
         percent = int(getattr(knob, "percent", 0))
         pretty = getattr(knob, "pretty", None)
-        widget.set_state(name=name, percent=percent, pretty=pretty)
+        raw_value = getattr(knob, "value", None)
+        widget.set_state(name=name, percent=percent, pretty=pretty, raw_value=raw_value)
         widget.set_enabled(enabled)
 
 
