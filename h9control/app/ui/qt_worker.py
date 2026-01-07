@@ -286,6 +286,8 @@ class H9DeviceWorker(QtCore.QObject):
             self._connect()
         if self._transport is not None and algo_key:
             knob_names = H9FullAlgorithmData.knob_names(algo_key)
+            knob_names.reverse()
+            
             knob_names_upper = [k.upper() for k in knob_names]
             if name in knob_names_upper:
                 knob_index_1based = knob_names_upper.index(name) + 1
