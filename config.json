@@ -50,5 +50,7 @@
             ]
         },
         "gpio": {}
-    }
+    },
+    "lock_delay": false,
+    "lock_feedback": false
 }

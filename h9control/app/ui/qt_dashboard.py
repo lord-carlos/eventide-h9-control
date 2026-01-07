@@ -83,6 +83,43 @@ class _LabeledProgress(QtWidgets.QWidget):
             self._label.setText(name)
         self._bar.setValue(max(0, min(100, percent)))
 
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable the widget (grayed out when disabled)."""
+        self.setEnabled(enabled)
+        if enabled:
+            self._label.setStyleSheet("")
+            self._bar.setStyleSheet(
+                "\n".join(
+                    (
+                        "QProgressBar {",
+                        "  border: 0px;",
+                        "  background: palette(mid);",
+                        f"  border-radius: {self._bar.height() // 2}px;",
+                        "}",
+                        "QProgressBar::chunk {",
+                        "  background: palette(highlight);",
+                        f"  border-radius: {self._bar.height() // 2}px;",
+                        "}",
+                    )
+                )
+            )
+        else:
+            self._label.setStyleSheet("color: #888;")
+            self._bar.setStyleSheet(
+                "\n".join(
+                    (
+                        "QProgressBar {",
+                        "  border: 0px;",
+                        "  background: #444;",
+                        f"  border-radius: {self._bar.height() // 2}px;",
+                        "}",
+                        "QProgressBar::chunk {",
+                        "  background: #666;",
+                        f"  border-radius: {self._bar.height() // 2}px;",
+                        "}",
+                    )
+                )
+            )
 
 class DashboardWidget(QtWidgets.QWidget):
     connect_refresh_requested = QtCore.Signal()
@@ -315,13 +352,13 @@ class DashboardWidget(QtWidgets.QWidget):
 
         
         knobs_by_name = {k.name: k for k in state.knobs}
-        self._apply_knob(self._dly_a, knobs_by_name.get("DLY-A"), fallback_label="DLY-A")
-        self._apply_knob(self._dly_b, knobs_by_name.get("DLY-B"), fallback_label="DLY-B")
-        self._apply_knob(self._fbk_a, knobs_by_name.get("FBK-A"), fallback_label="FBK-A")
-        self._apply_knob(self._fbk_b, knobs_by_name.get("FBK-B"), fallback_label="FBK-B")
+        self._apply_knob(self._dly_a, knobs_by_name.get("DLY-A"), fallback_label="DLY-A", enabled=True)
+        self._apply_knob(self._dly_b, knobs_by_name.get("DLY-B"), fallback_label="DLY-B", enabled=not state.lock_delay)
+        self._apply_knob(self._fbk_a, knobs_by_name.get("FBK-A"), fallback_label="FBK-A", enabled=True)
+        self._apply_knob(self._fbk_b, knobs_by_name.get("FBK-B"), fallback_label="FBK-B", enabled=not state.lock_feedback)
 
     @staticmethod
-    def _apply_knob(widget: "_LabeledProgress", knob: object | None, *, fallback_label: str) -> None:
+    def _apply_knob(widget: "_LabeledProgress", knob: object | None, *, fallback_label: str, enabled: bool = True) -> None:
         if knob is None:
             widget.setVisible(False)
             return
@@ -330,6 +367,7 @@ class DashboardWidget(QtWidgets.QWidget):
         percent = int(getattr(knob, "percent", 0))
         pretty = getattr(knob, "pretty", None)
         widget.set_state(name=name, percent=percent, pretty=pretty)
+        widget.set_enabled(enabled)
 
 
 from h9control.app.config import ConfigManager

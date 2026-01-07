@@ -112,7 +112,12 @@ class H9DeviceWorker(QtCore.QObject):
         self._last_event_refresh_at = 0.0
         self._event_refresh_in_progress = False
 
-        self._last_state = DashboardState(connected=False, status_text="Disconnected")
+        self._last_state = DashboardState(
+            connected=False,
+            status_text="Disconnected",
+            lock_delay=self._config.lock_delay,
+            lock_feedback=self._config.lock_feedback,
+        )
         self._current_program: int = 0
         self._knob_overrides: dict[str, int] = {}
         self._last_good_bpm: float | None = None
@@ -238,6 +243,22 @@ class H9DeviceWorker(QtCore.QObject):
         if name not in {"DLY-A", "DLY-B", "FBK-A", "FBK-B"}:
             return
 
+        # Check if lock mode is enabled and apply to both channels
+        knobs_to_adjust = [name]
+        if self._config.lock_delay and name in {"DLY-A", "DLY-B"}:
+            # When delay is locked, adjust both A and B
+            knobs_to_adjust = ["DLY-A", "DLY-B"]
+        elif self._config.lock_feedback and name in {"FBK-A", "FBK-B"}:
+            # When feedback is locked, adjust both A and B
+            knobs_to_adjust = ["FBK-A", "FBK-B"]
+
+        for knob in knobs_to_adjust:
+            self._adjust_single_knob(knob, delta)
+        
+        self._emit_state(self._state_with_overrides())
+
+    def _adjust_single_knob(self, name: str, delta: int) -> None:
+        """Adjust a single knob and send MIDI CC."""
         algo_key = (self._last_state.algorithm_key or "").upper()
 
         # Determine current raw value.
@@ -288,7 +309,6 @@ class H9DeviceWorker(QtCore.QObject):
                     )
 
         self._knob_overrides[name] = new_raw
-        self._emit_state(self._state_with_overrides())
 
     @QtCore.Slot(int)
     def adjust_bpm(self, delta_bpm: int) -> None:
@@ -406,7 +426,12 @@ class H9DeviceWorker(QtCore.QObject):
 
     def _connect(self) -> None:
         self._emit_state(
-            DashboardState(connected=False, status_text="Connecting…")
+            DashboardState(
+                connected=False,
+                status_text="Connecting…",
+                lock_delay=self._config.lock_delay,
+                lock_feedback=self._config.lock_feedback,
+            )
         )
 
         try:
@@ -420,14 +445,24 @@ class H9DeviceWorker(QtCore.QObject):
             self._start_rx_thread_if_needed()
 
             self._emit_state(
-                DashboardState(connected=True, status_text="Connected")
+                DashboardState(
+                    connected=True,
+                    status_text="Connected",
+                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,
+                )
             )
         except Exception as exc:
             self._logger.exception("Failed to connect")
             self._midi = None
             self._transport = None
             self._emit_state(
-                DashboardState(connected=False, status_text=f"Connect failed: {exc}")
+                DashboardState(
+                    connected=False,
+                    status_text=f"Connect failed: {exc}",
+                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,
+                )
             )
 
     def _refresh_state(self) -> None:
@@ -487,6 +522,8 @@ class H9DeviceWorker(QtCore.QObject):
                     algorithm_key=preset.algorithm_key,
                     bpm=bpm,
                     knobs=tuple(knobs),
+                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,
                 )
             )
         except Exception as exc:
@@ -502,6 +539,8 @@ class H9DeviceWorker(QtCore.QObject):
                     algorithm_key=prev.algorithm_key,
                     bpm=prev.bpm,
                     knobs=prev.knobs,
+                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,
                 )
             )
 
@@ -529,8 +568,8 @@ class H9DeviceWorker(QtCore.QObject):
                     algorithm_name=prev.algorithm_name,
                     algorithm_key=prev.algorithm_key,
                     bpm=prev.bpm,
-                    knobs=prev.knobs,
-                )
+                    knobs=prev.knobs,                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,                )
             )
 
     def _emit_state(self, state: DashboardState) -> None:
@@ -548,6 +587,11 @@ class H9DeviceWorker(QtCore.QObject):
         if self._live_bpm == bpm:
             return
         self._live_bpm = bpm
+        self._emit_state(self._state_with_overrides())
+
+    @QtCore.Slot()
+    def refresh_ui_state(self) -> None:
+        """Refresh UI state when settings change (e.g., lock toggles)."""
         self._emit_state(self._state_with_overrides())
 
     def _state_with_overrides(self) -> DashboardState:
@@ -582,7 +626,10 @@ class H9DeviceWorker(QtCore.QObject):
             algorithm_name=prev.algorithm_name,
             algorithm_key=prev.algorithm_key,
             bpm=prev.bpm,
+            live_bpm=self._live_bpm,
             knobs=tuple(updated),
+            lock_delay=self._config.lock_delay,
+            lock_feedback=self._config.lock_feedback,
         )
 
     def _start_rx_thread_if_needed(self) -> None:

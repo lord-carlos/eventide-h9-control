@@ -11,6 +11,7 @@ from h9control.app.config import ConfigManager
 
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
+    settings_changed = QtCore.Signal()  # Emitted when settings change that affect UI
 
     def __init__(self, config: ConfigManager) -> None:
         super().__init__()
@@ -72,6 +73,24 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_bpm.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_bpm, bpm_layout)
 
+        # Lock Delay Checkbox
+        self._lock_delay_checkbox = QtWidgets.QCheckBox("Lock Delay A/B Together")
+        self._lock_delay_checkbox.setFont(QtGui.QFont("Arial", 12))
+        self._lock_delay_checkbox.stateChanged.connect(self._on_lock_delay_changed)
+        
+        lbl_lock_delay = QtWidgets.QLabel("Delay Lock:")
+        lbl_lock_delay.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_lock_delay, self._lock_delay_checkbox)
+
+        # Lock Feedback Checkbox
+        self._lock_feedback_checkbox = QtWidgets.QCheckBox("Lock Feedback A/B Together")
+        self._lock_feedback_checkbox.setFont(QtGui.QFont("Arial", 12))
+        self._lock_feedback_checkbox.stateChanged.connect(self._on_lock_feedback_changed)
+        
+        lbl_lock_feedback = QtWidgets.QLabel("Feedback Lock:")
+        lbl_lock_feedback.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_lock_feedback, self._lock_feedback_checkbox)
+
         layout.addLayout(form_layout)
         layout.addStretch()
 
@@ -112,6 +131,10 @@ class SettingsWidget(QtWidgets.QWidget):
             self._bpm_mode_continuous.setChecked(True)
         else:
             self._bpm_mode_manual.setChecked(True)
+        
+        # Lock settings
+        self._lock_delay_checkbox.setChecked(self.config.lock_delay)
+        self._lock_feedback_checkbox.setChecked(self.config.lock_feedback)
 
     def _on_device_changed(self, index: int) -> None:
         device_id = self._device_combo.itemData(index)
@@ -128,6 +151,16 @@ class SettingsWidget(QtWidgets.QWidget):
         else:
             self.config.auto_bpm_mode = "manual"
         logging.info(f"BPM mode changed to: {self.config.auto_bpm_mode}")
+
+    def _on_lock_delay_changed(self, state: int) -> None:
+        self.config.lock_delay = (state == QtCore.Qt.CheckState.Checked.value)
+        logging.info(f"Lock delay changed to: {self.config.lock_delay}")
+        self.settings_changed.emit()
+
+    def _on_lock_feedback_changed(self, state: int) -> None:
+        self.config.lock_feedback = (state == QtCore.Qt.CheckState.Checked.value)
+        logging.info(f"Lock feedback changed to: {self.config.lock_feedback}")
+        self.settings_changed.emit()
 
     def __del__(self) -> None:
         self._pyaudio.terminate()

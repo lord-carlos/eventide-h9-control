@@ -48,6 +48,7 @@ def main() -> None:
 
     window.dashboard.adjust_knob_requested.connect(worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection)
     window.dashboard.adjust_bpm_requested.connect(worker.adjust_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.settings.settings_changed.connect(worker.refresh_ui_state, QtCore.Qt.ConnectionType.QueuedConnection)
     window.dashboard.sync_live_bpm_requested.connect(worker.sync_live_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
 
     worker.state_changed.connect(window.dashboard.apply_state)

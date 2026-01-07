@@ -24,6 +24,8 @@ class DashboardState:
     live_bpm: float | None = None
 
     knobs: tuple[KnobBarState, ...] = ()
+    lock_delay: bool = False
+    lock_feedback: bool = False
 
 
 def ascii_bar(percent: int, *, width: int = 12) -> str:

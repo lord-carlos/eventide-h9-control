@@ -58,6 +58,8 @@ class ShortcutsConfig:
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig.default)
+    lock_delay: bool = False
+    lock_feedback: bool = False
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -105,7 +107,10 @@ class ConfigManager:
                     gpio=gpio_bindings,
                 )
                 
-                return AppConfig(audio=audio_config, shortcuts=shortcuts_config)
+                lock_delay = data.get("lock_delay", False)
+                lock_feedback = data.get("lock_feedback", False)
+                
+                return AppConfig(audio=audio_config, shortcuts=shortcuts_config, lock_delay=lock_delay, lock_feedback=lock_feedback)
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
             return AppConfig.default()
@@ -142,4 +147,22 @@ class ConfigManager:
     @auto_bpm_mode.setter
     def auto_bpm_mode(self, value: str) -> None:
         self.config.audio.auto_bpm_mode = value
+        self.save()
+
+    @property
+    def lock_delay(self) -> bool:
+        return self.config.lock_delay
+
+    @lock_delay.setter
+    def lock_delay(self, value: bool) -> None:
+        self.config.lock_delay = value
+        self.save()
+
+    @property
+    def lock_feedback(self) -> bool:
+        return self.config.lock_feedback
+
+    @lock_feedback.setter
+    def lock_feedback(self, value: bool) -> None:
+        self.config.lock_feedback = value
         self.save()

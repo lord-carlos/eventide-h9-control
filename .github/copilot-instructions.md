@@ -25,9 +25,8 @@ Primary flows implemented:
 - Goal: a simple “pedal dashboard” showing current preset, algorithm, BPM, some knobs (with TimeFactor-friendly formatting where available), plus buttons for next/prev preset and tap/tempo sync later.
 - Resolution (hardcoded for now): start with `720×1280` fullscreen. Keep this as a single constant so it’s easy to change later.
 
-Framework options (pick one):
-- **PySide6 / Qt**: best for a Pi touchscreen kiosk; strong widgets/layout; easy fullscreen; use a worker thread for MIDI I/O and signal/slot updates.
-- **DearPyGui**: fastest to prototype; immediate-mode UI; good for Windows dev; fullscreen works; still run MIDI in a background thread.
+## Compile and run
+Compile and run the app with `uv run python ui_main.py --log-level DEBUG`
 
 Architecture notes:
 - Keep `H9Protocol` + `MidiTransport` off the UI thread. UI triggers actions; a background worker performs SysEx/Program Change and publishes a single “current state” snapshot back to the UI.
