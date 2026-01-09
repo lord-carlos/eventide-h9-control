@@ -4,10 +4,16 @@
 # Disable screen blanking (optional)
 # swayidle -w timeout 300 'swaymsg "output * dpms off"' resume 'swaymsg "output * dpms on"' &
 
-# Determine the actual user and project directory
+# Get script directory to find project root
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Determine the actual user home for uv location
 INSTALL_USER="${USER:-pi}"
 INSTALL_HOME=$(eval echo ~$INSTALL_USER)
-PROJECT_DIR="${INSTALL_HOME}/eventide-h9-control"
+
+# Allow software rendering if hardware EGL is unavailable
+export WLR_RENDERER_ALLOW_SOFTWARE=1
 
 # Touch rotation calibration for rotated displays
 # Uncomment and adjust if your touchscreen needs rotation
@@ -20,4 +26,4 @@ sleep 1  # Give compositor time to start
 
 # Run the application in fullscreen using uv
 cd "$PROJECT_DIR"
-"${INSTALL_HOME}/.local/bin/uv" run h9-control --fullscreen
+"${INSTALL_HOME}/.local/bin/uv" run python ui_main.py --fullscreen

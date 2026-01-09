@@ -82,12 +82,12 @@ sudo usermod -a -G audio $INSTALL_USER
 # 7. Install systemd service
 echo "[7/7] Installing systemd service..."
 sudo cp "$PROJECT_DIR/linux/h9-control.service" /etc/systemd/system/
-# Update service file with actual paths
-sudo sed -i "s|/home/pi|$INSTALL_HOME|g" /etc/systemd/system/h9-control.service
-sudo sed -i "s|User=pi|User=$INSTALL_USER|g" /etc/systemd/system/h9-control.service
 # Get UID for XDG_RUNTIME_DIR
 INSTALL_UID=$(id -u $INSTALL_USER)
-sudo sed -i "s|/run/user/1000|/run/user/$INSTALL_UID|g" /etc/systemd/system/h9-control.service
+# Substitute template variables with actual values
+sudo sed -i "s|__PROJECT_DIR__|$PROJECT_DIR|g" /etc/systemd/system/h9-control.service
+sudo sed -i "s|__INSTALL_USER__|$INSTALL_USER|g" /etc/systemd/system/h9-control.service
+sudo sed -i "s|__INSTALL_UID__|$INSTALL_UID|g" /etc/systemd/system/h9-control.service
 
 sudo chmod +x "$PROJECT_DIR/linux/start-app.sh"
 sudo systemctl daemon-reload

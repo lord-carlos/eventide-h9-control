@@ -5,12 +5,12 @@ Conflicts=zynthian.service
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/eventide-h9-control
+User=__INSTALL_USER__
+WorkingDirectory=__PROJECT_DIR__
 # Ensure we have a runtime directory for Wayland
-Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=XDG_RUNTIME_DIR=/run/user/__INSTALL_UID__
 # Start labwc (Wayland compositor) and have it run our startup script
-ExecStart=/usr/bin/labwc -s /home/pi/eventide-h9-control/linux/start-app.sh
+ExecStart=/usr/bin/labwc -s __PROJECT_DIR__/linux/start-app.sh
 Restart=always
 RestartSec=10
 
