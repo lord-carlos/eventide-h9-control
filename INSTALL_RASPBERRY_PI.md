@@ -11,11 +11,11 @@ sudo ./linux/install.sh
 ```
 
 The install script will:
-- Install system dependencies (Wayland compositor, Qt6, MIDI, audio libraries)
+- Install system dependencies (Wayland compositor, Qt6, MIDI, audio libraries, GPIO libraries)
 - Install `uv` (Python environment manager)
 - Install Python dependencies
 - Create a default `config.json`
-- Add your user to the `audio` group (for MIDI access)
+- Add your user to the `audio` and `gpio` groups (for MIDI and GPIO access)
 - Install the systemd service
 
 ## 2. Enable Auto-Start
@@ -46,5 +46,13 @@ Edit `config.json` to customize:
 - Keyboard shortcuts
 - GPIO pins (see `config.example-with-gpio.json`)
 - Knob lock settings
+
+## GPIO Hardware Buttons
+
+If using GPIO buttons, ensure you have the required permissions:
+- The installer adds your user to the `gpio` group automatically
+- You must **log out and back in** (or reboot) for group changes to take effect
+- GPIO buttons require `rpi-lgpio` package (already in dependencies)
+- System libraries (`libgpiod2`) are installed automatically
 
 **Note:** Log out and back in after installation for group permissions to take effect.

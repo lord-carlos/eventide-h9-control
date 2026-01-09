@@ -37,7 +37,10 @@ sudo apt install -y \
     libjack-jackd2-dev \
     portaudio19-dev \
     libaubio-dev \
-    libaubio5
+    libaubio5 \
+    libgpiod2 \
+    python3-dev \
+    gpiod
 
 # 3. Install uv (Python package manager)
 echo "[3/7] Installing uv..."
@@ -75,9 +78,10 @@ EOF
 echo "Created labwc config at $INSTALL_HOME/.config/labwc/rc.xml"
 echo "Edit this file to enable display rotation if needed"
 
-# 6. Add user to audio group for MIDI access
+# 6. Add user to audio and gpio groups for MIDI/GPIO access
 echo "[6/8] Configuring user permissions..."
 sudo usermod -a -G audio $INSTALL_USER
+sudo usermod -a -G gpio $INSTALL_USER
 
 # 7. Install systemd service
 echo "[7/7] Installing systemd service..."

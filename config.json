@@ -49,7 +49,29 @@
                 "Left"
             ]
         },
-        "gpio": {}
+        "gpio": {
+            "adjust_knob_1_up": {
+                "pin": 17,
+                "pull": "up",
+                "edge": "falling",
+                "debounce_ms": 10,
+                "hold_threshold_ms": 500
+            },
+            "adjust_knob_1_down": {
+                "pin": 22,
+                "pull": "up",
+                "edge": "falling",
+                "debounce_ms": 10,
+                "hold_threshold_ms": 500
+            },
+            "sync_live_bpm_hold": {
+                "pin": 27,
+                "pull": "up",
+                "edge": "falling",
+                "debounce_ms": 50,
+                "hold_threshold_ms": 500
+            }
+        }
     },
     "lock_delay": true,
     "lock_feedback": true,

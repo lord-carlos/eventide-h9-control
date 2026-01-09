@@ -208,11 +208,7 @@ class H9DeviceWorker(QtCore.QObject):
 
     def _invoke_on_main_thread(self, method: Callable, *args) -> None:
         """Invoke a Qt slot on the main thread from GPIO callback."""
-        QtCore.QMetaObject.invokeMethod(
-            self,
-            lambda: method(*args),
-            QtCore.Qt.ConnectionType.QueuedConnection,
-        )
+        QtCore.QTimer.singleShot(0, lambda: method(*args))
 
     @QtCore.Slot()
     def connect_or_refresh(self) -> None:

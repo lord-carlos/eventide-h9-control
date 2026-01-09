@@ -12,8 +12,23 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 try:
-    from gpiozero import Button  # type: ignore
+    from gpiozero import Button, Device  # type: ignore
     GPIOZERO_AVAILABLE = True
+    
+    # Explicitly load rpi-lgpio pin factory if available
+    try:
+        from gpiozero.pins.lgpio import LGPIOFactory  # type: ignore
+        if Device.pin_factory is None:
+            Device.pin_factory = LGPIOFactory()
+            logging.getLogger(__name__).info(
+                f"Loaded pin factory: {Device.pin_factory.__class__.__name__}"
+            )
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            f"Could not load rpi-lgpio pin factory: {e}. "
+            f"GPIO may not work. Pin factory status: {Device.pin_factory}"
+        )
+        
 except ImportError:
     GPIOZERO_AVAILABLE = False
     Button = None
