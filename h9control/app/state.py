@@ -26,6 +26,7 @@ class DashboardState:
     knobs: tuple[KnobBarState, ...] = ()
     lock_delay: bool = False
     lock_feedback: bool = False
+    lock_pitch: bool = False
 
 
 def ascii_bar(percent: int, *, width: int = 12) -> str:

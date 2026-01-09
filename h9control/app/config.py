@@ -37,14 +37,14 @@ class ShortcutsConfig:
         # Default keyboard shortcuts matching current hardcoded bindings
         return cls(
             keyboard={
-                "adjust_dly_a_up": ["1"],
-                "adjust_dly_a_down": ["Q"],
-                "adjust_dly_b_up": ["2"],
-                "adjust_dly_b_down": ["W"],
-                "adjust_fbk_a_up": ["3"],
-                "adjust_fbk_a_down": ["E"],
-                "adjust_fbk_b_up": ["4"],
-                "adjust_fbk_b_down": ["R"],
+                "adjust_knob_1_up": ["1"],
+                "adjust_knob_1_down": ["Q"],
+                "adjust_knob_2_up": ["2"],
+                "adjust_knob_2_down": ["W"],
+                "adjust_knob_3_up": ["3"],
+                "adjust_knob_3_down": ["E"],
+                "adjust_knob_4_up": ["4"],
+                "adjust_knob_4_down": ["R"],
                 "adjust_bpm_up": ["5"],
                 "adjust_bpm_down": ["T"],
                 "sync_live_bpm": ["D"],
@@ -60,6 +60,8 @@ class AppConfig:
     shortcuts: ShortcutsConfig = field(default_factory=ShortcutsConfig.default)
     lock_delay: bool = False
     lock_feedback: bool = False
+    lock_pitch: bool = False
+    knob_order: tuple[str, ...] = ("DLY-A", "DLY-B", "FBK-A", "FBK-B")
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -109,8 +111,11 @@ class ConfigManager:
                 
                 lock_delay = data.get("lock_delay", False)
                 lock_feedback = data.get("lock_feedback", False)
+                lock_pitch = data.get("lock_pitch", False)
+                knob_order_list = data.get("knob_order", ["DLY-A", "DLY-B", "FBK-A", "FBK-B"])
+                knob_order = tuple(knob_order_list)
                 
-                return AppConfig(audio=audio_config, shortcuts=shortcuts_config, lock_delay=lock_delay, lock_feedback=lock_feedback)
+                return AppConfig(audio=audio_config, shortcuts=shortcuts_config, lock_delay=lock_delay, lock_feedback=lock_feedback, lock_pitch=lock_pitch, knob_order=knob_order)
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
             return AppConfig.default()
@@ -165,4 +170,22 @@ class ConfigManager:
     @lock_feedback.setter
     def lock_feedback(self, value: bool) -> None:
         self.config.lock_feedback = value
+        self.save()
+
+    @property
+    def lock_pitch(self) -> bool:
+        return self.config.lock_pitch
+
+    @lock_pitch.setter
+    def lock_pitch(self, value: bool) -> None:
+        self.config.lock_pitch = value
+        self.save()
+
+    @property
+    def knob_order(self) -> tuple[str, ...]:
+        return self.config.knob_order
+
+    @knob_order.setter
+    def knob_order(self, value: tuple[str, ...]) -> None:
+        self.config.knob_order = value
         self.save()

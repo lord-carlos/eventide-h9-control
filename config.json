@@ -2,32 +2,32 @@
     "audio": {
         "input_device_id": 2,
         "input_channels": 1,
-        "auto_bpm_mode": "continuous"
+        "auto_bpm_mode": "manual"
     },
     "shortcuts": {
         "keyboard": {
-            "adjust_dly_a_up": [
+            "adjust_knob_1_up": [
                 "1"
             ],
-            "adjust_dly_a_down": [
+            "adjust_knob_1_down": [
                 "Q"
             ],
-            "adjust_dly_b_up": [
+            "adjust_knob_2_up": [
                 "2"
             ],
-            "adjust_dly_b_down": [
+            "adjust_knob_2_down": [
                 "W"
             ],
-            "adjust_fbk_a_up": [
+            "adjust_knob_3_up": [
                 "3"
             ],
-            "adjust_fbk_a_down": [
+            "adjust_knob_3_down": [
                 "E"
             ],
-            "adjust_fbk_b_up": [
+            "adjust_knob_4_up": [
                 "4"
             ],
-            "adjust_fbk_b_down": [
+            "adjust_knob_4_down": [
                 "R"
             ],
             "adjust_bpm_up": [
@@ -51,6 +51,18 @@
         },
         "gpio": {}
     },
-    "lock_delay": false,
-    "lock_feedback": false
+    "lock_delay": true,
+    "lock_feedback": true,
+    "lock_pitch": false,
+    "knob_order": [
+        "DLY-A",
+        "DLY-B",
+        "FBK-A",
+        "FBK-B",
+        "M-DPTH",
+        "FEEDBK",
+        "RESNCE",
+        "SLURM",
+        "TAPER"
+    ]
 }

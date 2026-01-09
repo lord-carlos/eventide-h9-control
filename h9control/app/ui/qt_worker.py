@@ -117,6 +117,7 @@ class H9DeviceWorker(QtCore.QObject):
             status_text="Disconnected",
             lock_delay=self._config.lock_delay,
             lock_feedback=self._config.lock_feedback,
+            lock_pitch=self._config.lock_pitch,
         )
         self._current_program: int = 0
         self._knob_overrides: dict[str, int] = {}
@@ -157,14 +158,14 @@ class H9DeviceWorker(QtCore.QObject):
             "sync_live_bpm": lambda: self._invoke_on_main_thread(self.sync_live_bpm),
             "adjust_bpm_up": lambda: self._invoke_on_main_thread(self.adjust_bpm, 1),
             "adjust_bpm_down": lambda: self._invoke_on_main_thread(self.adjust_bpm, -1),
-            "adjust_dly_a_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-A", 1),
-            "adjust_dly_a_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-A", -1),
-            "adjust_dly_b_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-B", 1),
-            "adjust_dly_b_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "DLY-B", -1),
-            "adjust_fbk_a_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-A", 1),
-            "adjust_fbk_a_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-A", -1),
-            "adjust_fbk_b_up": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-B", 1),
-            "adjust_fbk_b_down": lambda: self._invoke_on_main_thread(self.adjust_knob, "FBK-B", -1),
+            "adjust_knob_1_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 0, 1),
+            "adjust_knob_1_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 0, -1),
+            "adjust_knob_2_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 1, 1),
+            "adjust_knob_2_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 1, -1),
+            "adjust_knob_3_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 2, 1),
+            "adjust_knob_3_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 2, -1),
+            "adjust_knob_4_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 3, 1),
+            "adjust_knob_4_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 3, -1),
         }
 
         # Group actions by pin (tap vs hold variants)
@@ -236,11 +237,17 @@ class H9DeviceWorker(QtCore.QObject):
         """Keyboard-driven knob tweak.
 
         Updates the UI model in discrete steps and pushes the change to the pedal
-        via VALUE_PUT using the knob-key scheme.
+        via MIDI CC.
+        
+        Supports any knob name from the current preset. Lock behavior applies to
+        DLY-A/B and FBK-A/B pairs when enabled.
         """
 
         name = knob_name.strip().upper()
-        if name not in {"DLY-A", "DLY-B", "FBK-A", "FBK-B"}:
+        
+        # Validate that the knob exists in the current state
+        knob_exists = any(k.name.upper() == name for k in self._last_state.knobs)
+        if not knob_exists:
             return
 
         # Check if lock mode is enabled and apply to both channels
@@ -251,11 +258,24 @@ class H9DeviceWorker(QtCore.QObject):
         elif self._config.lock_feedback and name in {"FBK-A", "FBK-B"}:
             # When feedback is locked, adjust both A and B
             knobs_to_adjust = ["FBK-A", "FBK-B"]
+        elif self._config.lock_pitch and name in {"PICH-A", "PICH-B"}:
+            # When pitch is locked, adjust both A and B
+            knobs_to_adjust = ["PICH-A", "PICH-B"]
 
         for knob in knobs_to_adjust:
             self._adjust_single_knob(knob, delta)
         
         self._emit_state(self._state_with_overrides())
+
+    @QtCore.Slot(int, int)
+    def adjust_knob_slot(self, slot_index: int, delta: int) -> None:
+        """Slot-based knob adjustment (0-3 map to first 4 knobs in state.knobs)."""
+        if slot_index < 0 or slot_index >= len(self._last_state.knobs):
+            # No-op if slot doesn't exist
+            return
+        
+        knob_name = self._last_state.knobs[slot_index].name
+        self.adjust_knob(knob_name, delta)
 
     def _adjust_single_knob(self, name: str, delta: int) -> None:
         """Adjust a single knob and send MIDI CC."""
@@ -433,6 +453,7 @@ class H9DeviceWorker(QtCore.QObject):
                 status_text="Connecting…",
                 lock_delay=self._config.lock_delay,
                 lock_feedback=self._config.lock_feedback,
+                lock_pitch=self._config.lock_pitch,
             )
         )
 
@@ -452,6 +473,7 @@ class H9DeviceWorker(QtCore.QObject):
                     status_text="Connected",
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
+                    lock_pitch=self._config.lock_pitch,
                 )
             )
         except Exception as exc:
@@ -464,6 +486,7 @@ class H9DeviceWorker(QtCore.QObject):
                     status_text=f"Connect failed: {exc}",
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
+                    lock_pitch=self._config.lock_pitch,
                 )
             )
 
@@ -492,7 +515,7 @@ class H9DeviceWorker(QtCore.QObject):
             self._current_program = current_program
 
             knobs: list[KnobBarState] = []
-            wanted_order = ("DLY-A", "DLY-B", "FBK-A", "FBK-B")
+            wanted_order = self._config.knob_order
             if preset.knobs_by_name:
                 for name in wanted_order:
                     if name not in preset.knobs_by_name:
@@ -526,6 +549,7 @@ class H9DeviceWorker(QtCore.QObject):
                     knobs=tuple(knobs),
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
+                    lock_pitch=self._config.lock_pitch,
                 )
             )
         except Exception as exc:
@@ -543,6 +567,7 @@ class H9DeviceWorker(QtCore.QObject):
                     knobs=prev.knobs,
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
+                    lock_pitch=self._config.lock_pitch,
                 )
             )
 
@@ -570,8 +595,11 @@ class H9DeviceWorker(QtCore.QObject):
                     algorithm_name=prev.algorithm_name,
                     algorithm_key=prev.algorithm_key,
                     bpm=prev.bpm,
-                    knobs=prev.knobs,                    lock_delay=self._config.lock_delay,
-                    lock_feedback=self._config.lock_feedback,                )
+                    knobs=prev.knobs,
+                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,
+                    lock_pitch=self._config.lock_pitch,
+                )
             )
 
     def _emit_state(self, state: DashboardState) -> None:
@@ -632,6 +660,7 @@ class H9DeviceWorker(QtCore.QObject):
             knobs=tuple(updated),
             lock_delay=self._config.lock_delay,
             lock_feedback=self._config.lock_feedback,
+            lock_pitch=self._config.lock_pitch,
         )
 
     def _start_rx_thread_if_needed(self) -> None:

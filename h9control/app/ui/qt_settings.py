@@ -41,6 +41,8 @@ class SettingsWidget(QtWidgets.QWidget):
         form_layout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop)
         form_layout.setSpacing(15)
 
+        # TODO: Add knob_order to settings UI (configurable list of which knobs to display and in what order)
+
         # Audio Device
         self._device_combo = QtWidgets.QComboBox()
         self._device_combo.setMinimumWidth(300)
@@ -91,6 +93,15 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_lock_feedback.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_lock_feedback, self._lock_feedback_checkbox)
 
+        # Lock Pitch Checkbox
+        self._lock_pitch_checkbox = QtWidgets.QCheckBox("Lock Pitch A/B Together")
+        self._lock_pitch_checkbox.setFont(QtGui.QFont("Arial", 12))
+        self._lock_pitch_checkbox.stateChanged.connect(self._on_lock_pitch_changed)
+        
+        lbl_lock_pitch = QtWidgets.QLabel("Pitch Lock:")
+        lbl_lock_pitch.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_lock_pitch, self._lock_pitch_checkbox)
+
         layout.addLayout(form_layout)
         layout.addStretch()
 
@@ -135,6 +146,7 @@ class SettingsWidget(QtWidgets.QWidget):
         # Lock settings
         self._lock_delay_checkbox.setChecked(self.config.lock_delay)
         self._lock_feedback_checkbox.setChecked(self.config.lock_feedback)
+        self._lock_pitch_checkbox.setChecked(self.config.lock_pitch)
 
     def _on_device_changed(self, index: int) -> None:
         device_id = self._device_combo.itemData(index)
@@ -160,6 +172,11 @@ class SettingsWidget(QtWidgets.QWidget):
     def _on_lock_feedback_changed(self, state: int) -> None:
         self.config.lock_feedback = (state == QtCore.Qt.CheckState.Checked.value)
         logging.info(f"Lock feedback changed to: {self.config.lock_feedback}")
+        self.settings_changed.emit()
+
+    def _on_lock_pitch_changed(self, state: int) -> None:
+        self.config.lock_pitch = (state == QtCore.Qt.CheckState.Checked.value)
+        logging.info(f"Lock pitch changed to: {self.config.lock_pitch}")
         self.settings_changed.emit()
 
     def __del__(self) -> None:

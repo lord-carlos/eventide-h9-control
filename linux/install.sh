@@ -1,0 +1,90 @@
+#!/bin/bash
+set -e
+
+echo "========================================="
+echo "Eventide H9 Control - Raspberry Pi Setup"
+echo "========================================="
+echo ""
+
+# Detect current user (in case run with sudo)
+INSTALL_USER="${SUDO_USER:-$USER}"
+INSTALL_HOME=$(eval echo ~$INSTALL_USER)
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "Installing for user: $INSTALL_USER"
+echo "Project directory: $PROJECT_DIR"
+echo ""
+
+# 1. Update system
+echo "[1/7] Updating system packages..."
+sudo apt update
+
+# 2. Install system dependencies
+echo "[2/7] Installing system dependencies..."
+sudo apt install -y \
+    git \
+    build-essential \
+    labwc \
+    libegl1 \
+    libgles2 \
+    libwayland-client0 \
+    libxkbcommon0 \
+    libglib2.0-0 \
+    libfontconfig1 \
+    libdbus-1-3 \
+    libasound2-dev \
+    libjack-jackd2-dev \
+    portaudio19-dev \
+    libaubio-dev \
+    libaubio5
+
+# 3. Install uv (Python package manager)
+echo "[3/7] Installing uv..."
+if ! command -v uv &> /dev/null; then
+    sudo -u $INSTALL_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+    export PATH="$INSTALL_HOME/.local/bin:$PATH"
+else
+    echo "uv already installed"
+fi
+
+# 4. Install Python dependencies
+echo "[4/7] Installing Python dependencies..."
+cd "$PROJECT_DIR"
+sudo -u $INSTALL_USER bash -c "export PATH=\"$INSTALL_HOME/.local/bin:\$PATH\" && uv sync"
+
+# 6. Add user to audio group for MIDI access
+echo "[6/7] Configuring user permissions..."
+sudo usermod -a -G audio $INSTALL_USER
+
+# 7. Install systemd service
+echo "[7/7] Installing systemd service..."
+sudo cp "$PROJECT_DIR/linux/h9-control.service" /etc/systemd/system/
+# Update service file with actual paths
+sudo sed -i "s|/home/pi|$INSTALL_HOME|g" /etc/systemd/system/h9-control.service
+sudo sed -i "s|User=pi|User=$INSTALL_USER|g" /etc/systemd/system/h9-control.service
+# Get UID for XDG_RUNTIME_DIR
+INSTALL_UID=$(id -u $INSTALL_USER)
+sudo sed -i "s|/run/user/1000|/run/user/$INSTALL_UID|g" /etc/systemd/system/h9-control.service
+
+sudo chmod +x "$PROJECT_DIR/linux/start-app.sh"
+sudo systemctl daemon-reload
+
+echo ""
+echo "========================================="
+echo "Installation complete!"
+echo "========================================="
+echo ""
+echo "To enable auto-start on boot:"
+echo "  sudo systemctl enable h9-control"
+echo ""
+echo "To start the service now:"
+echo "  sudo systemctl start h9-control"
+echo ""
+echo "To view logs:"
+echo "  journalctl -u h9-control -f"
+echo ""
+echo "To test manually (without systemd):"
+echo "  $INSTALL_HOME/.local/bin/uv run python ui_main.py --fullscreen"
+echo ""
+echo "Note: You may need to log out and back in for group changes to take effect."
+echo ""

@@ -5,7 +5,7 @@ import argparse
 from PySide6 import QtCore, QtWidgets
 
 from h9control.app.config import ConfigManager
-from h9control.app.ui.qt_dashboard import MainWindow, fit_window_to_screen
+from h9control.app.ui.qt_dashboard import MainWindow, configure_fullscreen, fit_window_to_screen
 from h9control.app.ui.qt_worker import H9DeviceWorker
 from h9control.audio.beat_detector import BeatDetector
 from h9control.logging_setup import configure_logging
@@ -24,6 +24,11 @@ def main() -> None:
         default=0,
         help="MIDI channel for Program Change (0-15). Default: 0.",
     )
+    parser.add_argument(
+        "--fullscreen",
+        action="store_true",
+        help="Launch in fullscreen mode (removes window frame and maximizes).",
+    )
     args = parser.parse_args()
 
     configure_logging(cli_level=args.log_level)
@@ -33,7 +38,10 @@ def main() -> None:
     app = QtWidgets.QApplication([])
 
     window = MainWindow(config)
-    fit_window_to_screen(window)
+    if args.fullscreen:
+        configure_fullscreen(window)
+    else:
+        fit_window_to_screen(window)
 
     thread = QtCore.QThread()
     worker = H9DeviceWorker(config=config, midi_channel=args.midi_channel)
@@ -47,6 +55,7 @@ def main() -> None:
     window.dashboard.prev_requested.connect(worker.prev_preset, QtCore.Qt.ConnectionType.QueuedConnection)
 
     window.dashboard.adjust_knob_requested.connect(worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection)
+    window.dashboard.adjust_knob_slot_requested.connect(worker.adjust_knob_slot, QtCore.Qt.ConnectionType.QueuedConnection)
     window.dashboard.adjust_bpm_requested.connect(worker.adjust_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
     window.settings.settings_changed.connect(worker.refresh_ui_state, QtCore.Qt.ConnectionType.QueuedConnection)
     window.dashboard.sync_live_bpm_requested.connect(worker.sync_live_bpm, QtCore.Qt.ConnectionType.QueuedConnection)

@@ -24,7 +24,7 @@ Keyboard shortcuts map action names to one or more key sequences:
 "keyboard": {
   "next_preset": ["Right", "N"],
   "sync_live_bpm": ["D", "Return"],
-  "adjust_dly_a_up": ["1", "Up"]
+  "adjust_knob_1_up": ["1", "Up"]
 }
 ```
 
@@ -45,14 +45,34 @@ Keyboard shortcuts map action names to one or more key sequences:
 | `sync_live_bpm` | Send detected live BPM to H9 |
 | `adjust_bpm_up` | Increase BPM by 1 |
 | `adjust_bpm_down` | Decrease BPM by 1 |
-| `adjust_dly_a_up` | Increase Delay A knob |
-| `adjust_dly_a_down` | Decrease Delay A knob |
-| `adjust_dly_b_up` | Increase Delay B knob |
-| `adjust_dly_b_down` | Decrease Delay B knob |
-| `adjust_fbk_a_up` | Increase Feedback A knob |
-| `adjust_fbk_a_down` | Decrease Feedback A knob |
-| `adjust_fbk_b_up` | Increase Feedback B knob |
-| `adjust_fbk_b_down` | Decrease Feedback B knob |
+| `adjust_knob_1_up` | Increase knob in slot 1 |
+| `adjust_knob_1_down` | Decrease knob in slot 1 |
+| `adjust_knob_2_up` | Increase knob in slot 2 |
+| `adjust_knob_2_down` | Decrease knob in slot 2 |
+| `adjust_knob_3_up` | Increase knob in slot 3 |
+| `adjust_knob_3_down` | Decrease knob in slot 3 |
+| `adjust_knob_4_up` | Increase knob in slot 4 |
+| `adjust_knob_4_down` | Decrease knob in slot 4 |
+
+**Note:** Knob slots (1-4) map to the knobs configured in `knob_order` (see below). By default: slot 1 = DLY-A, slot 2 = DLY-B, slot 3 = FBK-A, slot 4 = FBK-B. If the current algorithm doesn't have a knob from `knob_order`, that slot remains empty and shortcuts do nothing.
+
+## Knob Display Order
+
+The dashboard shows up to 4 knobs at a time. You can configure which knobs appear and in what order using the `knob_order` field in `config.json`:
+
+```json
+{
+  "knob_order": ["DLY-A", "DLY-B", "FBK-A", "FBK-B"],
+  "shortcuts": { ... }
+}
+```
+
+- The first 4 knobs from `knob_order` that exist in the current preset/algorithm will be displayed.
+- Knobs not present in the algorithm are skipped (e.g., if "DLY-A" isn't available, the next knob in the list is used).
+- You can list any knob name from the H9 algorithms (e.g., `"MIX"`, `"SIZE"`, `"FILTER"`, `"PICH-A"`, etc.).
+- Order matters: the first entry maps to slot 1, second to slot 2, etc.
+
+**Lock behavior:** DLY-A/DLY-B and FBK-A/FBK-B pairs remain locked when `lock_delay` or `lock_feedback` is enabled, regardless of which knobs are displayed. Adjusting one knob in a locked pair updates both on the pedal.
 
 ## GPIO Hardware Buttons (Raspberry Pi)
 

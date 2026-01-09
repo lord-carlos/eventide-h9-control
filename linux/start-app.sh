@@ -1,11 +1,14 @@
 #!/bin/bash
 # This script is executed by labwc on startup
 
-# Optional: Disable screen blanking
+# Disable screen blanking (optional)
 # swayidle -w timeout 300 'swaymsg "output * dpms off"' resume 'swaymsg "output * dpms on"' &
 
-# Run the application using uv
-# We use --qt-wayland to ensure it uses the Wayland backend if needed, 
-# though PySide6 usually detects it.
-cd /home/pi/eventide-h9-control
-/home/pi/.local/bin/uv run python ui_main.py
+# Determine the actual user and project directory
+INSTALL_USER="${USER:-pi}"
+INSTALL_HOME=$(eval echo ~$INSTALL_USER)
+PROJECT_DIR="${INSTALL_HOME}/eventide-h9-control"
+
+# Run the application in fullscreen using uv
+cd "$PROJECT_DIR"
+"${INSTALL_HOME}/.local/bin/uv" run python ui_main.py --fullscreen

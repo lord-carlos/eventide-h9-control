@@ -176,6 +176,7 @@ class DashboardWidget(QtWidgets.QWidget):
     next_requested = QtCore.Signal()
     prev_requested = QtCore.Signal()
     adjust_knob_requested = QtCore.Signal(str, int)
+    adjust_knob_slot_requested = QtCore.Signal(int, int)  # slot_index, delta
     adjust_bpm_requested = QtCore.Signal(int)
     sync_live_bpm_requested = QtCore.Signal()
     settings_requested = QtCore.Signal()
@@ -193,10 +194,8 @@ class DashboardWidget(QtWidgets.QWidget):
         self._status_dot.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._status_dot.mousePressEvent = lambda e: self.settings_requested.emit()
 
-        self._dly_a = _LabeledProgress(fonts)
-        self._dly_b = _LabeledProgress(fonts)
-        self._fbk_a = _LabeledProgress(fonts)
-        self._fbk_b = _LabeledProgress(fonts)
+        # Create 4 knob slots (populated dynamically from state.knobs)
+        self._knob_slots = [_LabeledProgress(fonts) for _ in range(4)]
 
         self._preset_name = QtWidgets.QLabel("—")
         self._preset_name.setFont(fonts.title)
@@ -251,8 +250,8 @@ class DashboardWidget(QtWidgets.QWidget):
         dly_group_layout = QtWidgets.QHBoxLayout(dly_group)
         dly_group_layout.setContentsMargins(0, 0, 0, 0)
         dly_group_layout.setSpacing(_KNOB_GROUP_SPACING)
-        dly_group_layout.addWidget(self._dly_a, 1)
-        dly_group_layout.addWidget(self._dly_b, 1)
+        dly_group_layout.addWidget(self._knob_slots[0], 1)
+        dly_group_layout.addWidget(self._knob_slots[1], 1)
         # Store reference to ensure FBK group matches this width
         self._dly_group = dly_group
 
@@ -300,8 +299,8 @@ class DashboardWidget(QtWidgets.QWidget):
         fbk_group_layout = QtWidgets.QHBoxLayout(fbk_group)
         fbk_group_layout.setContentsMargins(0, 0, 0, 0)
         fbk_group_layout.setSpacing(_KNOB_GROUP_SPACING)
-        fbk_group_layout.addWidget(self._fbk_a, 1)
-        fbk_group_layout.addWidget(self._fbk_b, 1)
+        fbk_group_layout.addWidget(self._knob_slots[2], 1)
+        fbk_group_layout.addWidget(self._knob_slots[3], 1)
         # Store reference to sync width with DLY group
         self._fbk_group = fbk_group
 
@@ -345,14 +344,14 @@ class DashboardWidget(QtWidgets.QWidget):
             "sync_live_bpm": lambda: self.sync_live_bpm_requested.emit(),
             "adjust_bpm_up": lambda: self.adjust_bpm_requested.emit(+1),
             "adjust_bpm_down": lambda: self.adjust_bpm_requested.emit(-1),
-            "adjust_dly_a_up": lambda: self.adjust_knob_requested.emit("DLY-A", +1),
-            "adjust_dly_a_down": lambda: self.adjust_knob_requested.emit("DLY-A", -1),
-            "adjust_dly_b_up": lambda: self.adjust_knob_requested.emit("DLY-B", +1),
-            "adjust_dly_b_down": lambda: self.adjust_knob_requested.emit("DLY-B", -1),
-            "adjust_fbk_a_up": lambda: self.adjust_knob_requested.emit("FBK-A", +1),
-            "adjust_fbk_a_down": lambda: self.adjust_knob_requested.emit("FBK-A", -1),
-            "adjust_fbk_b_up": lambda: self.adjust_knob_requested.emit("FBK-B", +1),
-            "adjust_fbk_b_down": lambda: self.adjust_knob_requested.emit("FBK-B", -1),
+            "adjust_knob_1_up": lambda: self.adjust_knob_slot_requested.emit(0, +1),
+            "adjust_knob_1_down": lambda: self.adjust_knob_slot_requested.emit(0, -1),
+            "adjust_knob_2_up": lambda: self.adjust_knob_slot_requested.emit(1, +1),
+            "adjust_knob_2_down": lambda: self.adjust_knob_slot_requested.emit(1, -1),
+            "adjust_knob_3_up": lambda: self.adjust_knob_slot_requested.emit(2, +1),
+            "adjust_knob_3_down": lambda: self.adjust_knob_slot_requested.emit(2, -1),
+            "adjust_knob_4_up": lambda: self.adjust_knob_slot_requested.emit(3, +1),
+            "adjust_knob_4_down": lambda: self.adjust_knob_slot_requested.emit(3, -1),
         }
 
         # Get keyboard shortcuts from config or use empty dict if no config
@@ -414,12 +413,26 @@ class DashboardWidget(QtWidgets.QWidget):
             self._lbl_live_bpm.setText(live_html)
 
 
-        
-        knobs_by_name = {k.name: k for k in state.knobs}
-        self._apply_knob(self._dly_a, knobs_by_name.get("DLY-A"), fallback_label="DLY-A", enabled=True)
-        self._apply_knob(self._dly_b, knobs_by_name.get("DLY-B"), fallback_label="DLY-B", enabled=not state.lock_delay)
-        self._apply_knob(self._fbk_a, knobs_by_name.get("FBK-A"), fallback_label="FBK-A", enabled=True)
-        self._apply_knob(self._fbk_b, knobs_by_name.get("FBK-B"), fallback_label="FBK-B", enabled=not state.lock_feedback)
+        # Apply knobs to slots with smart greying for locked pairs
+        for slot_index, widget in enumerate(self._knob_slots):
+            if slot_index >= len(state.knobs):
+                # No knob data for this slot - hide it
+                widget.setVisible(False)
+                continue
+            
+            knob = state.knobs[slot_index]
+            name = knob.name
+            
+            # Determine if this knob should be greyed out (secondary in locked pair)
+            enabled = True
+            if state.lock_delay and name == "DLY-B":
+                enabled = False
+            elif state.lock_feedback and name == "FBK-B":
+                enabled = False
+            elif state.lock_pitch and name == "PICH-B":
+                enabled = False
+            
+            self._apply_knob(widget, knob, fallback_label=name, enabled=enabled)
 
     @staticmethod
     def _apply_knob(widget: "_LabeledProgress", knob: object | None, *, fallback_label: str, enabled: bool = True) -> None:
