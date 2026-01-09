@@ -10,7 +10,10 @@ dependencies = [
     "mido>=1.3.3",
     "numpy>=2.4.0",
     "pyaudio>=0.2.14",
-    "pyside6>=6.10.1",
+    # PySide6 pinned to 6.8.x for Raspberry Pi ARM64 compatibility (glibc 2.36).
+    # v6.10+ requires glibc 2.39, unavailable on Raspberry Pi OS.
+    # v6.7+ required for modern enum syntax (Qt.Alignment.AlignCenter).
+    "pyside6~=6.8.0",
     "python-rtmidi>=1.5.8",
 ]
 
