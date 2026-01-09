@@ -6,14 +6,40 @@ from enum import Enum
 from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
 
 
+# MIDI CC range (0-127)
+MAX_MIDI_CC_VALUE = 127
+
+
 class TimeDivision(Enum):
-    OFF = "OFF"
+    """All TimeFactor delay note divisions including triplets (T) and dotted (D)."""
+
+    OFF = "No DLY"
     N1_64 = "1/64"
+    N1_32T = "1/32 T"
+    N1_64D = "1/64 D"
     N1_32 = "1/32"
+    N1_16T = "1/16 T"
+    N1_32D = "1/32 D"
     N1_16 = "1/16"
+    N1_8T = "1/8 T"
+    N1_16D = "1/16 D"
     N1_8 = "1/8"
+    N1_4T = "1/4 T"
+    N1_8D = "1/8 D"
     N1_4 = "1/4"
+    N5_16 = "5/16"
+    N1_2T = "1/2 T"
+    N1_4D = "1/4 D"
+    N7_16 = "7/16"
     N1_2 = "1/2"
+    N9_16 = "9/16"
+    N10_16 = "10/16"
+    N1_1T = "WHOLE T"
+    N11_16 = "11/16"
+    N1_2D = "1/2 D"
+    N13_16 = "13/16"
+    N14_16 = "14/16"
+    N15_16 = "15/16"
     N1_1 = "1/1"
 
     def __str__(self) -> str:
@@ -26,23 +52,39 @@ class QuantizedValue:
     division: TimeDivision | None = None
 
 
-# Empirical/UX-oriented mapping for TimeFactor tempo-synced delay time knobs.
+# Empirical mapping for TimeFactor tempo-synced delay time knobs.
 #
-# This is not guaranteed to match every H9 firmware/version perfectly, but it
-# aligns with observed values:
-# - ~37.5% shows as 1/8
-# - ~50% shows as 1/4
-# - ~65% shows as 1/2
-# - 100% shows as 1/1
-_TIMEFACTOR_DELAY_NOTE_POINTS: list[tuple[float, TimeDivision]] = [
-    (0.0, TimeDivision.OFF),
-    (12.5, TimeDivision.N1_64),
-    (25.0, TimeDivision.N1_32),
-    (31.25, TimeDivision.N1_16),
-    (37.5, TimeDivision.N1_8),
-    (50.0, TimeDivision.N1_4),
-    (66.6667, TimeDivision.N1_2),
-    (100.0, TimeDivision.N1_1),
+# Maps MIDI CC values (0-127) to TimeDivision.
+# Use the test script `scripts/test_delay_cc.py` to find exact switch points.
+_TIMEFACTOR_DELAY_NOTE_POINTS: list[tuple[int, TimeDivision]] = [
+    (0, TimeDivision.OFF),
+    (3, TimeDivision.N1_64),
+    (8, TimeDivision.N1_32T),
+    (12, TimeDivision.N1_64D),
+    (17, TimeDivision.N1_32),
+    (22, TimeDivision.N1_16T),
+    (26, TimeDivision.N1_32D),
+    (31, TimeDivision.N1_16),
+    (36, TimeDivision.N1_8T),
+    (40, TimeDivision.N1_16D),
+    (45, TimeDivision.N1_8),
+    (50, TimeDivision.N1_4T),
+    (54, TimeDivision.N1_8D),
+    (59, TimeDivision.N1_4),
+    (64, TimeDivision.N5_16),
+    (68, TimeDivision.N1_2T),
+    (73, TimeDivision.N1_4D),
+    (78, TimeDivision.N7_16),
+    (82, TimeDivision.N1_2),
+    (87, TimeDivision.N9_16),
+    (92, TimeDivision.N10_16),
+    (96, TimeDivision.N1_1T),
+    (101, TimeDivision.N11_16),
+    (106, TimeDivision.N1_2D),
+    (110, TimeDivision.N13_16),
+    (115, TimeDivision.N14_16),
+    (120, TimeDivision.N15_16),
+    (124, TimeDivision.N1_1),
 ]
 
 
@@ -50,15 +92,47 @@ _TIMEFACTOR_ALGO_KEYS = {"DIGDLY", "VNTAGE", "TAPE", "MODDLY"}
 
 
 def _pct_from_raw(value: int) -> float:
+    """Convert raw 14-bit knob value to percentage (0-100)."""
     return (value / MAX_KNOB_VALUE_14BIT) * 100.0
 
 
+def _midi_cc_from_raw(value: int) -> int:
+    """Convert raw 14-bit knob value to MIDI CC value (0-127)."""
+    return int(round((value / MAX_KNOB_VALUE_14BIT) * MAX_MIDI_CC_VALUE))
+
+
+def _raw_from_midi_cc(midi_cc: int) -> int:
+    """Convert MIDI CC value (0-127) to raw 14-bit knob value."""
+    return int(round((midi_cc / MAX_MIDI_CC_VALUE) * MAX_KNOB_VALUE_14BIT))
+
+
+def _pct_from_midi_cc(midi_cc: int) -> float:
+    """Convert MIDI CC value (0-127) to percentage (0-100)."""
+    return (midi_cc / MAX_MIDI_CC_VALUE) * 100.0
+
+
 def quantize_timefactor_delay_note(value: int) -> TimeDivision:
-    pct = _pct_from_raw(value)
+    """Quantize a raw 14-bit knob value to the nearest TimeDivision.
+    
+    Uses the MIDI CC-based mapping in _TIMEFACTOR_DELAY_NOTE_POINTS.
+    """
+    midi_cc = _midi_cc_from_raw(value)
     best_div = _TIMEFACTOR_DELAY_NOTE_POINTS[0][1]
     best_dist = float("inf")
-    for point_pct, div in _TIMEFACTOR_DELAY_NOTE_POINTS:
-        dist = abs(pct - point_pct)
+    for point_cc, div in _TIMEFACTOR_DELAY_NOTE_POINTS:
+        dist = abs(midi_cc - point_cc)
+        if dist < best_dist:
+            best_dist = dist
+            best_div = div
+    return best_div
+
+
+def quantize_timefactor_delay_note_from_midi_cc(midi_cc: int) -> TimeDivision:
+    """Quantize a MIDI CC value (0-127) to the nearest TimeDivision."""
+    best_div = _TIMEFACTOR_DELAY_NOTE_POINTS[0][1]
+    best_dist = float("inf")
+    for point_cc, div in _TIMEFACTOR_DELAY_NOTE_POINTS:
+        dist = abs(midi_cc - point_cc)
         if dist < best_dist:
             best_dist = dist
             best_div = div
@@ -105,8 +179,8 @@ def format_knob_value(
     if algo in _TIMEFACTOR_ALGO_KEYS and name in {"DLY-A", "DLY-B"}:
         div = quantize_timefactor_delay_note(raw_value)
         if div == TimeDivision.OFF:
-            return QuantizedValue(label="OFF", division=div)
-        return QuantizedValue(label=f"{div} note", division=div)
+            return QuantizedValue(label="No DLY", division=div)
+        return QuantizedValue(label=str(div), division=div)
 
     # TimeFactor mix between A/B
     if algo in _TIMEFACTOR_ALGO_KEYS and name == "DLYMIX":
@@ -133,6 +207,6 @@ def step_timefactor_delay_note_raw(current_raw: int, *, delta: int) -> int:
         idx = 0
 
     new_idx = max(0, min(len(divisions) - 1, idx + (1 if delta > 0 else -1)))
-    target_pct = _TIMEFACTOR_DELAY_NOTE_POINTS[new_idx][0]
-    target_raw = int(round((target_pct / 100.0) * MAX_KNOB_VALUE_14BIT))
+    target_midi_cc = _TIMEFACTOR_DELAY_NOTE_POINTS[new_idx][0]
+    target_raw = _raw_from_midi_cc(target_midi_cc)
     return max(0, min(MAX_KNOB_VALUE_14BIT, target_raw))

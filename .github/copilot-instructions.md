@@ -1,4 +1,4 @@
-This project controls the Eventide H9 MIDI FX unit via MIDI SysEx (Eventide manufacturer 0x1C, model 0x70).
+This project controls the Eventide H9 MIDI FX unit via MIDI and MIDI SysEx (Eventide manufacturer 0x1C, model 0x70).
 
 Primary flows implemented:
 - Read current preset/program dump (SYSEXC_TJ_PROGRAM_WANT 0x4E -> PROGRAM_DUMP 0x4F) and parse to a `PresetSnapshot`.
