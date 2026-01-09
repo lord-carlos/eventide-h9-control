@@ -1,6 +1,7 @@
 [Unit]
 Description=Eventide H9 Control UI
 After=network.target
+Conflicts=zynthian.service
 
 [Service]
 Type=simple
