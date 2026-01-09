@@ -25,6 +25,7 @@ sudo apt install -y \
     git \
     build-essential \
     labwc \
+    wlr-randr \
     libegl1 \
     libgles2 \
     libwayland-client0 \
@@ -48,12 +49,34 @@ else
 fi
 
 # 4. Install Python dependencies
-echo "[4/7] Installing Python dependencies..."
+echo "[4/8] Installing Python dependencies..."
 cd "$PROJECT_DIR"
 sudo -u $INSTALL_USER bash -c "export PATH=\"$INSTALL_HOME/.local/bin:\$PATH\" && uv sync"
 
+# 5. Create labwc configuration for display rotation
+echo "[5/8] Setting up labwc display configuration..."
+sudo -u $INSTALL_USER mkdir -p "$INSTALL_HOME/.config/labwc"
+sudo -u $INSTALL_USER cat > "$INSTALL_HOME/.config/labwc/rc.xml" << 'EOF'
+<?xml version="1.0"?>
+<labwc_config>
+  <core>
+    <gap>0</gap>
+  </core>
+  <!-- Screen rotation configuration -->
+  <!-- Uncomment and adjust as needed for your display -->
+  <!--
+  <output>
+    <name>DSI-2</name>
+    <transform>90</transform>
+  </output>
+  -->
+</labwc_config>
+EOF
+echo "Created labwc config at $INSTALL_HOME/.config/labwc/rc.xml"
+echo "Edit this file to enable display rotation if needed"
+
 # 6. Add user to audio group for MIDI access
-echo "[6/7] Configuring user permissions..."
+echo "[6/8] Configuring user permissions..."
 sudo usermod -a -G audio $INSTALL_USER
 
 # 7. Install systemd service
