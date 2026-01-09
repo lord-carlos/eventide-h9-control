@@ -266,16 +266,29 @@ class H9DeviceWorker(QtCore.QObject):
     @QtCore.Slot(int, int)
     def adjust_knob_slot(self, slot_index: int, delta: int) -> None:
         """Slot-based knob adjustment (0-3 map to first 4 knobs in state.knobs)."""
+        self._logger.debug(
+            f"adjust_knob_slot: slot_index={slot_index}, delta={delta}, "
+            f"num_knobs={len(self._last_state.knobs)}, "
+            f"connected={self._last_state.connected}"
+        )
+        
         if slot_index < 0 or slot_index >= len(self._last_state.knobs):
-            # No-op if slot doesn't exist
+            self._logger.warning(
+                f"Knob slot {slot_index} out of range (have {len(self._last_state.knobs)} knobs)"
+            )
             return
         
         knob_name = self._last_state.knobs[slot_index].name
+        self._logger.debug(f"Adjusting knob '{knob_name}' by {delta}")
         self.adjust_knob(knob_name, delta)
 
     def _adjust_single_knob(self, name: str, delta: int) -> None:
         """Adjust a single knob and send MIDI CC."""
         algo_key = (self._last_state.algorithm_key or "").upper()
+        
+        self._logger.debug(
+            f"_adjust_single_knob: name={name}, delta={delta}, algo_key={algo_key or 'NONE'}"
+        )
 
         # Determine current raw value.
         current_raw: int | None = None
@@ -287,6 +300,7 @@ class H9DeviceWorker(QtCore.QObject):
                     current_raw = int(getattr(k, "raw_value", 0))
                     break
         if current_raw is None:
+            self._logger.warning(f"Could not find current value for knob '{name}'")
             return
 
         if name in {"DLY-A", "DLY-B"} and algo_key in {"DIGDLY", "VNTAGE", "TAPE", "MODDLY"}:
@@ -301,6 +315,7 @@ class H9DeviceWorker(QtCore.QObject):
         if self._transport is None:
             self._connect()
         if self._transport is not None and algo_key:
+            self._logger.debug(f"Sending CC for knob '{name}' (algo: {algo_key})")
             knob_names = H9FullAlgorithmData.knob_names(algo_key)
             knob_names.reverse()
             
@@ -325,6 +340,10 @@ class H9DeviceWorker(QtCore.QObject):
                         cc_number,
                         cc_value,
                     )
+        elif self._transport is None:
+            self._logger.warning(f"Cannot send CC for '{name}': not connected")
+        elif not algo_key:
+            self._logger.warning(f"Cannot send CC for '{name}': no algorithm_key loaded")
 
         self._knob_overrides[name] = new_raw
 
