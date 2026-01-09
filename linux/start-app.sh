@@ -11,4 +11,4 @@ PROJECT_DIR="${INSTALL_HOME}/eventide-h9-control"
 
 # Run the application in fullscreen using uv
 cd "$PROJECT_DIR"
-"${INSTALL_HOME}/.local/bin/uv" run python ui_main.py --fullscreen
+"${INSTALL_HOME}/.local/bin/uv" run h9-control --fullscreen

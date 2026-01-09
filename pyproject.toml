@@ -13,3 +13,7 @@ dependencies = [
     "pyside6>=6.10.1",
     "python-rtmidi>=1.5.8",
 ]
+
+[project.scripts]
+h9-control = "ui_main:main"
+h9-control-cli = "main:main"
