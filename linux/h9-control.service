@@ -9,6 +9,7 @@ User=__INSTALL_USER__
 WorkingDirectory=__PROJECT_DIR__
 # Ensure we have a runtime directory for Wayland
 Environment=XDG_RUNTIME_DIR=/run/user/__INSTALL_UID__
+Environment="WLR_RENDERER_ALLOW_SOFTWARE=1"
 # Start labwc (Wayland compositor) and have it run our startup script
 ExecStart=/usr/bin/labwc -s __PROJECT_DIR__/linux/start-app.sh
 Restart=always

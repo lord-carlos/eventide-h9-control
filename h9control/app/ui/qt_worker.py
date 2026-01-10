@@ -182,6 +182,8 @@ class H9DeviceWorker(QtCore.QObject):
                 self._logger.warning(f"Unknown GPIO action: {action_name}")
                 continue
             
+            self._logger.debug(f"Mapped GPIO action '{action_name}' -> '{base_action}' (handler: {handler})")
+            
             if pin not in pin_actions:
                 pin_actions[pin] = {
                     "tap": None,
@@ -197,6 +199,10 @@ class H9DeviceWorker(QtCore.QObject):
         # Bind each pin with its tap/hold actions
         for pin, actions in pin_actions.items():
             cfg = actions["config"]
+            self._logger.info(
+                f"Binding GPIO pin {pin}: tap={actions['tap'] is not None}, "
+                f"hold={actions['hold'] is not None}"
+            )
             self._gpio.bind_action(
                 pin=pin,
                 tap_action=actions["tap"],

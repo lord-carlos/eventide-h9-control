@@ -127,7 +127,11 @@ class GpioInputManager:
                 if hold_duration_ms < hold_threshold_ms:
                     if tap_action:
                         self._logger.info(f"GPIO pin {pin} tap action triggered")
-                        tap_action()
+                        try:
+                            tap_action()
+                            self._logger.debug(f"GPIO pin {pin} tap action completed")
+                        except Exception as e:
+                            self._logger.exception(f"GPIO pin {pin} tap action failed: {e}")
                 else:
                     # Long press but hold action wasn't triggered in held state
                     # This can happen if hold_action is None
