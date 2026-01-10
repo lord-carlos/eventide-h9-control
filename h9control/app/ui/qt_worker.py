@@ -214,6 +214,8 @@ class H9DeviceWorker(QtCore.QObject):
 
     def _invoke_on_main_thread(self, method: Callable, *args) -> None:
         """Invoke a Qt slot on the main thread from GPIO callback."""
+        self._logger.debug(f"_invoke_on_main_thread called for {method.__name__}")
+        
         def wrapper():
             try:
                 self._logger.debug(f"_invoke_on_main_thread executing: {method.__name__} with args {args}")
@@ -221,7 +223,11 @@ class H9DeviceWorker(QtCore.QObject):
             except Exception:
                 self._logger.exception(f"Failed to invoke {method.__name__} on main thread")
         
-        QtCore.QTimer.singleShot(0, wrapper)
+        try:
+            QtCore.QTimer.singleShot(0, wrapper)
+            self._logger.debug(f"QTimer.singleShot scheduled for {method.__name__}")
+        except Exception:
+            self._logger.exception(f"Failed to schedule QTimer for {method.__name__}")
 
     @QtCore.Slot()
     def connect_or_refresh(self) -> None:
