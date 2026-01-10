@@ -26,4 +26,4 @@ wlr-randr --output DSI-2 --transform 90
 
 # Run the application in fullscreen using uv
 cd "$PROJECT_DIR"
-"${INSTALL_HOME}/.local/bin/uv" run python ui_main.py --fullscreen
+"${INSTALL_HOME}/.local/bin/uv" run python ui_main.py --fullscreen --log-level DEBUG
