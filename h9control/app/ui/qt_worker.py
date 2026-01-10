@@ -74,6 +74,14 @@ class _PresetChangeDetector:
 class H9DeviceWorker(QtCore.QObject):
     state_changed = QtCore.Signal(object)
     preset_change_detected = QtCore.Signal()
+    
+    # Internal signals for GPIO callbacks (thread-safe)
+    _gpio_adjust_knob_slot_signal = QtCore.Signal(int, int)
+    _gpio_next_preset_signal = QtCore.Signal()
+    _gpio_prev_preset_signal = QtCore.Signal()
+    _gpio_connect_refresh_signal = QtCore.Signal()
+    _gpio_sync_live_bpm_signal = QtCore.Signal()
+    _gpio_adjust_bpm_signal = QtCore.Signal(int)
 
     def __init__(
         self,
@@ -133,6 +141,14 @@ class H9DeviceWorker(QtCore.QObject):
         )
 
         self._setup_gpio_bindings()
+        
+        # Connect internal GPIO signals to slots
+        self._gpio_adjust_knob_slot_signal.connect(self.adjust_knob_slot)
+        self._gpio_next_preset_signal.connect(self.next_preset)
+        self._gpio_prev_preset_signal.connect(self.prev_preset)
+        self._gpio_connect_refresh_signal.connect(self.connect_or_refresh)
+        self._gpio_sync_live_bpm_signal.connect(self.sync_live_bpm)
+        self._gpio_adjust_bpm_signal.connect(self.adjust_bpm)
 
     def _setup_gpio_bindings(self) -> None:
         """Load GPIO bindings from config and wire them to Qt signals.
@@ -152,20 +168,20 @@ class H9DeviceWorker(QtCore.QObject):
 
         # Map action names to callables
         action_map: dict[str, Callable[[], None]] = {
-            "next_preset": lambda: self._invoke_on_main_thread(self.next_preset),
-            "prev_preset": lambda: self._invoke_on_main_thread(self.prev_preset),
-            "connect_refresh": lambda: self._invoke_on_main_thread(self.connect_or_refresh),
-            "sync_live_bpm": lambda: self._invoke_on_main_thread(self.sync_live_bpm),
-            "adjust_bpm_up": lambda: self._invoke_on_main_thread(self.adjust_bpm, 1),
-            "adjust_bpm_down": lambda: self._invoke_on_main_thread(self.adjust_bpm, -1),
-            "adjust_knob_1_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 0, 1),
-            "adjust_knob_1_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 0, -1),
-            "adjust_knob_2_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 1, 1),
-            "adjust_knob_2_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 1, -1),
-            "adjust_knob_3_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 2, 1),
-            "adjust_knob_3_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 2, -1),
-            "adjust_knob_4_up": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 3, 1),
-            "adjust_knob_4_down": lambda: self._invoke_on_main_thread(self.adjust_knob_slot, 3, -1),
+            "next_preset": lambda: self._gpio_next_preset_signal.emit(),
+            "prev_preset": lambda: self._gpio_prev_preset_signal.emit(),
+            "connect_refresh": lambda: self._gpio_connect_refresh_signal.emit(),
+            "sync_live_bpm": lambda: self._gpio_sync_live_bpm_signal.emit(),
+            "adjust_bpm_up": lambda: self._gpio_adjust_bpm_signal.emit(1),
+            "adjust_bpm_down": lambda: self._gpio_adjust_bpm_signal.emit(-1),
+            "adjust_knob_1_up": lambda: self._gpio_adjust_knob_slot_signal.emit(0, 1),
+            "adjust_knob_1_down": lambda: self._gpio_adjust_knob_slot_signal.emit(0, -1),
+            "adjust_knob_2_up": lambda: self._gpio_adjust_knob_slot_signal.emit(1, 1),
+            "adjust_knob_2_down": lambda: self._gpio_adjust_knob_slot_signal.emit(1, -1),
+            "adjust_knob_3_up": lambda: self._gpio_adjust_knob_slot_signal.emit(2, 1),
+            "adjust_knob_3_down": lambda: self._gpio_adjust_knob_slot_signal.emit(2, -1),
+            "adjust_knob_4_up": lambda: self._gpio_adjust_knob_slot_signal.emit(3, 1),
+            "adjust_knob_4_down": lambda: self._gpio_adjust_knob_slot_signal.emit(3, -1),
         }
 
         # Group actions by pin (tap vs hold variants)
