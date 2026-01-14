@@ -50,26 +50,20 @@
             ]
         },
         "gpio": {
-            "adjust_knob_1_up": {
+            "sync_live_bpm_hold": {
                 "pin": 17,
                 "pull": "up",
                 "edge": "falling",
                 "debounce_ms": 10,
                 "hold_threshold_ms": 500
-            },
-            "adjust_knob_1_down": {
-                "pin": 22,
-                "pull": "up",
-                "edge": "falling",
-                "debounce_ms": 10,
-                "hold_threshold_ms": 500
-            },
-            "sync_live_bpm_hold": {
-                "pin": 27,
-                "pull": "up",
-                "edge": "falling",
-                "debounce_ms": 50,
-                "hold_threshold_ms": 500
+            }
+        },
+        "rotary_encoders": {
+            "knob_1_encoder": {
+                "clk_pin": 22,
+                "dt_pin": 27,
+                "action_cw": "adjust_knob_1_up",
+                "action_ccw": "adjust_knob_1_down"
             }
         }
     },

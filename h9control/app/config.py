@@ -23,6 +23,15 @@ class GpioBindingConfig:
 
 
 @dataclass
+class RotaryEncoderConfig:
+    """Configuration for a quadrature-encoded rotary encoder."""
+    clk_pin: int  # CLK pin (rotary encoder A signal)
+    dt_pin: int   # DT pin (rotary encoder B signal)
+    action_cw: str  # Action name for clockwise rotation
+    action_ccw: str  # Action name for counter-clockwise rotation
+
+
+@dataclass
 class ShortcutsConfig:
     # Maps action names to list of key sequences. Each action can have multiple keys.
     # Each key can appear in multiple actions (one key → multiple actions).
@@ -31,6 +40,9 @@ class ShortcutsConfig:
     # Maps action names to GPIO config. Each pin can only bind to one action,
     # but actions can have both "tap" and "hold" variants (e.g., "next_preset" and "next_preset_hold").
     gpio: dict[str, GpioBindingConfig] = field(default_factory=dict)
+    
+    # Maps encoder names to rotary encoder config. Each encoder triggers two actions (CW/CCW).
+    rotary_encoders: dict[str, RotaryEncoderConfig] = field(default_factory=dict)
 
     @classmethod
     def default(cls) -> ShortcutsConfig:
@@ -92,6 +104,7 @@ class ConfigManager:
                 shortcuts_data = data.get("shortcuts", {})
                 keyboard_data = shortcuts_data.get("keyboard", {})
                 gpio_data = shortcuts_data.get("gpio", {})
+                rotary_encoders_data = shortcuts_data.get("rotary_encoders", {})
                 
                 # Parse GPIO bindings
                 gpio_bindings = {}
@@ -104,9 +117,20 @@ class ConfigManager:
                         hold_threshold_ms=gpio_cfg.get("hold_threshold_ms", 500),
                     )
                 
+                # Parse rotary encoder bindings
+                rotary_encoder_bindings = {}
+                for encoder_name, encoder_cfg in rotary_encoders_data.items():
+                    rotary_encoder_bindings[encoder_name] = RotaryEncoderConfig(
+                        clk_pin=encoder_cfg["clk_pin"],
+                        dt_pin=encoder_cfg["dt_pin"],
+                        action_cw=encoder_cfg["action_cw"],
+                        action_ccw=encoder_cfg["action_ccw"],
+                    )
+                
                 shortcuts_config = ShortcutsConfig(
                     keyboard=keyboard_data if keyboard_data else ShortcutsConfig.default().keyboard,
                     gpio=gpio_bindings,
+                    rotary_encoders=rotary_encoder_bindings,
                 )
                 
                 lock_delay = data.get("lock_delay", False)

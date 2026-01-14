@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 try:
-    from gpiozero import Button, Device  # type: ignore
+    from gpiozero import Button, Device, RotaryEncoder  # type: ignore
     GPIOZERO_AVAILABLE = True
     
     # Explicitly load rpi-lgpio pin factory if available
@@ -32,6 +32,7 @@ try:
 except ImportError:
     GPIOZERO_AVAILABLE = False
     Button = None
+    RotaryEncoder = None
 
 
 @dataclass
@@ -55,6 +56,7 @@ class GpioInputManager:
     def __init__(self) -> None:
         self._buttons: dict[int, Any] = {}  # Button instances when available
         self._button_states: dict[int, _GpioButtonState] = {}
+        self._rotary_encoders: dict[str, Any] = {}  # RotaryEncoder instances by name
         self._logger = logging.getLogger(__name__)
 
         if not GPIOZERO_AVAILABLE:
@@ -170,8 +172,81 @@ class GpioInputManager:
         except Exception as e:
             self._logger.error(f"Failed to bind GPIO pin {pin}: {e}")
 
+    def bind_rotary_encoder(
+        self,
+        *,
+        encoder_name: str,
+        clk_pin: int,
+        dt_pin: int,
+        action_cw: Callable[[], None] | None = None,
+        action_ccw: Callable[[], None] | None = None,
+    ) -> None:
+        """Bind clockwise and counter-clockwise actions to a rotary encoder.
+        
+        Uses quadrature encoding via gpiozero.RotaryEncoder to detect rotation direction.
+        
+        Args:
+            encoder_name: Unique name for this encoder (for logging/tracking)
+            clk_pin: BCM pin number for CLK signal (encoder A)
+            dt_pin: BCM pin number for DT signal (encoder B)
+            action_cw: Callback for clockwise rotation
+            action_ccw: Callback for counter-clockwise rotation
+        """
+        if not GPIOZERO_AVAILABLE:
+            self._logger.debug(
+                f"Rotary encoder '{encoder_name}' binding skipped (gpiozero unavailable)"
+            )
+            return
+
+        if action_cw is None and action_ccw is None:
+            self._logger.warning(
+                f"Rotary encoder '{encoder_name}' has no CW or CCW action"
+            )
+            return
+
+        try:
+            # Create RotaryEncoder instance
+            encoder = RotaryEncoder(clk_pin, dt_pin)  # type: ignore
+            
+            # Bind rotation callbacks
+            if action_cw:
+                def on_rotate_cw() -> None:
+                    self._logger.debug(f"Rotary encoder '{encoder_name}' rotated CW")
+                    try:
+                        action_cw()
+                    except Exception as e:
+                        self._logger.exception(
+                            f"Rotary encoder '{encoder_name}' CW action failed: {e}"
+                        )
+                
+                encoder.when_rotated_clockwise = on_rotate_cw
+            
+            if action_ccw:
+                def on_rotate_ccw() -> None:
+                    self._logger.debug(f"Rotary encoder '{encoder_name}' rotated CCW")
+                    try:
+                        action_ccw()
+                    except Exception as e:
+                        self._logger.exception(
+                            f"Rotary encoder '{encoder_name}' CCW action failed: {e}"
+                        )
+                
+                encoder.when_rotated_counter_clockwise = on_rotate_ccw
+            
+            self._rotary_encoders[encoder_name] = encoder
+            self._logger.info(
+                f"Rotary encoder '{encoder_name}' bound (CLK={clk_pin}, DT={dt_pin}, "
+                f"CW={action_cw is not None}, CCW={action_ccw is not None})"
+            )
+
+        except Exception as e:
+            self._logger.error(
+                f"Failed to bind rotary encoder '{encoder_name}' "
+                f"(CLK={clk_pin}, DT={dt_pin}): {e}"
+            )
+
     def unbind_all(self) -> None:
-        """Release all GPIO pins."""
+        """Release all GPIO pins and rotary encoders."""
         for pin, button in self._buttons.items():
             try:
                 button.close()
@@ -179,8 +254,16 @@ class GpioInputManager:
             except Exception as e:
                 self._logger.error(f"Failed to release GPIO pin {pin}: {e}")
         
+        for encoder_name, encoder in self._rotary_encoders.items():
+            try:
+                encoder.close()
+                self._logger.debug(f"Rotary encoder '{encoder_name}' released")
+            except Exception as e:
+                self._logger.error(f"Failed to release rotary encoder '{encoder_name}': {e}")
+        
         self._buttons.clear()
         self._button_states.clear()
+        self._rotary_encoders.clear()
 
     def is_available(self) -> bool:
         """Check if GPIO functionality is available."""

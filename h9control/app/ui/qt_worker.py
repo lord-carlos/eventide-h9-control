@@ -228,6 +228,41 @@ class H9DeviceWorker(QtCore.QObject):
                 hold_threshold_ms=cfg.hold_threshold_ms,
             )
 
+        # Bind rotary encoders
+        rotary_encoder_config = self._config.config.shortcuts.rotary_encoders
+        if rotary_encoder_config:
+            for encoder_name, encoder_cfg in rotary_encoder_config.items():
+                # Resolve action names to handlers
+                cw_handler = action_map.get(encoder_cfg.action_cw)
+                ccw_handler = action_map.get(encoder_cfg.action_ccw)
+                
+                if cw_handler is None:
+                    self._logger.warning(
+                        f"Unknown rotary encoder CW action for '{encoder_name}': "
+                        f"{encoder_cfg.action_cw}"
+                    )
+                if ccw_handler is None:
+                    self._logger.warning(
+                        f"Unknown rotary encoder CCW action for '{encoder_name}': "
+                        f"{encoder_cfg.action_ccw}"
+                    )
+                
+                if cw_handler is None and ccw_handler is None:
+                    continue
+                
+                self._logger.info(
+                    f"Binding rotary encoder '{encoder_name}': "
+                    f"CLK={encoder_cfg.clk_pin}, DT={encoder_cfg.dt_pin}, "
+                    f"CW={encoder_cfg.action_cw}, CCW={encoder_cfg.action_ccw}"
+                )
+                self._gpio.bind_rotary_encoder(
+                    encoder_name=encoder_name,
+                    clk_pin=encoder_cfg.clk_pin,
+                    dt_pin=encoder_cfg.dt_pin,
+                    action_cw=cw_handler,
+                    action_ccw=ccw_handler,
+                )
+
     def _invoke_on_main_thread(self, method: Callable, *args) -> None:
         """Invoke a Qt slot on the main thread from GPIO callback."""
         self._logger.debug(f"_invoke_on_main_thread called for {method.__name__}")
