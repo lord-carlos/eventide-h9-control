@@ -7,8 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "aubio>=0.4.9",
     "gpiozero>=2.0.1",
+    "lgpio>=0.2.2.0; sys_platform == 'linux'",
     "mido>=1.3.3",
-    "numpy>=2.4.0",
+    "numpy>=2.4.1",
     "pyaudio>=0.2.14",
     # PySide6 pinned to 6.7.x for Raspberry Pi ARM64 compatibility.
     # v6.8+ requires glibc 2.39, unavailable on Raspberry Pi OS.
