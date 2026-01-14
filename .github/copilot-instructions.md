@@ -21,10 +21,6 @@ Primary flows implemented:
 - H9 Algorithm Guide: `documentation/H9AlgorithmGuide+V12.pdf`
 - Local notes/summaries: `documentation/h9-sysex.md`
 
-## UI Ideas (MVP)
-- Goal: a simple “pedal dashboard” showing current preset, algorithm, BPM, some knobs (with TimeFactor-friendly formatting where available), plus buttons for next/prev preset and tap/tempo sync later.
-- Resolution (hardcoded for now): start with `720×1280` fullscreen. Keep this as a single constant so it’s easy to change later.
-
 ## Compile and run
 Compile and run the app with `uv run python ui_main.py --log-level DEBUG`
 
