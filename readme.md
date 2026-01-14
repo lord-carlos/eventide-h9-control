@@ -10,16 +10,16 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 ## Todo
 - [x] Integrate live audio BPM detection.
 - [x] Display both H9 BPM and calculated BPM from live audio input. Maybe next to each other.
-- Add a switch state, either locked BPM or continues live BPM calculation. If   locked, make a function to send the BPM to H9 one time.
-- A setting menu, fullscreen. And a way to permanently save settings. Maybe just a json? In current dir or in home dir?
+- [x]Add a switch state, either locked BPM or continues live BPM calculation. If   locked, make a function to send the BPM to H9 one time.
+- [x] A setting menu, fullscreen. And a way to permanently save settings. Maybe just a json? In current dir or in home dir?
 - Control keys, they need to switch preests in normal view, but change settings in the setting menu.
 - Double / halv BPM.
 
 
 ## Notes
 
-Traktor delay rates:
- - 4/4, 3/8, 1/4, 3/16, 1/8, 1/16, 1/32
+Effects I want to use:
+`DIGDLY, FLTDLY, ROOM, BKHOLE, ULTRA.T, M-FLTR`
 
 ## UI Dashboard (Qt / PySide6)
 
@@ -27,7 +27,6 @@ A minimal dashboard intended for a Raspberry Pi touchscreen.
 
 - Run on Windows (dev): `uv run python ui_main.py`
 
-Note: currently starts windowed at 720×1280 for debugging.
 
 ### Keyboard Shortcuts
 
@@ -38,20 +37,7 @@ All keyboard shortcuts are configurable in `config.json`. Default bindings:
 - **BPM control**: `5`/`T` (+/- BPM), `D` (sync live BPM)
 - **Settings**: `S`
 
-See [documentation/shortcuts-configuration.md](documentation/shortcuts-configuration.md) for full customization options.
 
 ### GPIO Hardware Buttons (Raspberry Pi)
 
-GPIO button support is available for Raspberry Pi hardware buttons. Install the GPIO library:
-
-```bash
-uv add gpiozero
-```
-
-Configure GPIO pins in `config.json` - see `config.example-with-gpio.json` for examples. Each button supports both tap and hold actions (e.g., tap for next preset, hold for settings).
-
-Full documentation: [documentation/shortcuts-configuration.md](documentation/shortcuts-configuration.md)
-
-Controls:
-- `Connect / Refresh` fetches preset + BPM.
-- `◀` / `▶` sends Program Change (prev/next) and re-reads state.
+GPIO button support is available for Raspberry Pi hardware buttons.
