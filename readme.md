@@ -14,6 +14,10 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 - [x] A setting menu, fullscreen. And a way to permanently save settings. Maybe just a json? In current dir or in home dir?
 - Control keys, they need to switch preests in normal view, but change settings in the setting menu.
 - Double / halv BPM.
+- add to config "ignore these notes" 
+- view for traktor
+- table for min og max value, and what kind of values. See the other repo. 
+- implement other bpm detection algorithm. 
 
 
 ## Notes
