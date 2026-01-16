@@ -1,7 +1,7 @@
 [Unit]
 Description=Eventide H9 Control UI
 After=network.target
-Conflicts=zynthian.service
+Conflicts=zynthian.service zynthian-webconf.service jack2.service
 
 [Service]
 Type=simple
