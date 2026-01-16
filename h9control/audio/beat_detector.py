@@ -20,7 +20,7 @@ from h9control.app.config import ConfigManager
 # =============================================================================
 
 # Audio capture settings
-SAMPLE_RATE = 44100  # Lower = less CPU (22050 for Pi, 44100 for high accuracy)
+SAMPLE_RATE = 48000  # Lower = less CPU (22050 for Pi, 44100 for high accuracy)
 BUFFER_SIZE = 1024  # PyAudio buffer size per read (samples)
 
 # Rolling buffer settings
@@ -142,13 +142,20 @@ class BeatDetector(QObject):
                 )
                 channels = max_input_channels
 
-            # Update sample rate to match device native rate (avoid resampling artifacts)
-            if native_rate != self.sample_rate:
-                logging.debug(
-                    f"Switching to native device rate: {native_rate} (was {self.sample_rate})"
-                )
-                self.sample_rate = native_rate
-                self._recalculate_buffer_sizes()
+            # Check if SAMPLE_RATE is explicitly set (non-zero, non-empty)
+            if SAMPLE_RATE and SAMPLE_RATE > 0:
+                # Force configured sample rate
+                logging.warning(f"Forcing sample rate to {SAMPLE_RATE}Hz (device native: {native_rate}Hz)")
+                self.sample_rate = SAMPLE_RATE
+            else:
+                # Use device native rate (avoid resampling artifacts)
+                if native_rate != self.sample_rate:
+                    logging.debug(
+                        f"Using native device rate: {native_rate}Hz (was {self.sample_rate}Hz)"
+                    )
+                    self.sample_rate = native_rate
+            
+            self._recalculate_buffer_sizes()
 
         except Exception as e:
             logging.error(f"Error getting device info for device {input_device_index}: {e}")
