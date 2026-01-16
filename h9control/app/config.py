@@ -11,6 +11,7 @@ class AudioConfig:
     input_device_id: int | None = None
     input_channels: int = 1
     auto_bpm_mode: str = "manual"  # "manual" or "continuous"
+    selected_channels: list[int] = field(default_factory=lambda: [0, 1])
 
 
 @dataclass
@@ -99,6 +100,7 @@ class ConfigManager:
                     input_device_id=audio_data.get("input_device_id"),
                     input_channels=audio_data.get("input_channels", 1),
                     auto_bpm_mode=audio_data.get("auto_bpm_mode", "manual"),
+                    selected_channels=audio_data.get("selected_channels", [0, 1]),
                 )
                 
                 shortcuts_data = data.get("shortcuts", {})
@@ -176,6 +178,15 @@ class ConfigManager:
     @auto_bpm_mode.setter
     def auto_bpm_mode(self, value: str) -> None:
         self.config.audio.auto_bpm_mode = value
+        self.save()
+
+    @property
+    def audio_selected_channels(self) -> list[int]:
+        return self.config.audio.selected_channels
+
+    @audio_selected_channels.setter
+    def audio_selected_channels(self, value: list[int]) -> None:
+        self.config.audio.selected_channels = value
         self.save()
 
     @property

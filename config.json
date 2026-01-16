@@ -1,8 +1,12 @@
 {
     "audio": {
-        "input_device_id": 2,
+        "input_device_id": 8,
         "input_channels": 2,
-        "auto_bpm_mode": "continuous"
+        "auto_bpm_mode": "continuous",
+        "selected_channels": [
+            0,
+            1
+        ]
     },
     "shortcuts": {
         "keyboard": {

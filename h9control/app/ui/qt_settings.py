@@ -17,6 +17,8 @@ class SettingsWidget(QtWidgets.QWidget):
         super().__init__()
         self.config = config
         self._pyaudio = pyaudio.PyAudio()
+        self._channel_left_combo: QtWidgets.QComboBox | None = None
+        self._channel_right_combo: QtWidgets.QComboBox | None = None
 
         self._init_ui()
         self._load_settings()
@@ -52,6 +54,24 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_device = QtWidgets.QLabel("Audio Input Device:")
         lbl_device.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_device, self._device_combo)
+
+        # Channel Selection - Left Channel
+        self._channel_left_combo = QtWidgets.QComboBox()
+        self._channel_left_combo.setMinimumWidth(300)
+        self._channel_left_combo.currentIndexChanged.connect(self._on_channel_changed)
+        
+        lbl_channel_left = QtWidgets.QLabel("Left Channel:")
+        lbl_channel_left.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_channel_left, self._channel_left_combo)
+
+        # Channel Selection - Right Channel
+        self._channel_right_combo = QtWidgets.QComboBox()
+        self._channel_right_combo.setMinimumWidth(300)
+        self._channel_right_combo.currentIndexChanged.connect(self._on_channel_changed)
+        
+        lbl_channel_right = QtWidgets.QLabel("Right Channel:")
+        lbl_channel_right.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_channel_right, self._channel_right_combo)
 
         # Auto BPM Send
         self._bpm_mode_group = QtWidgets.QButtonGroup(self)
@@ -128,6 +148,28 @@ class SettingsWidget(QtWidgets.QWidget):
         except Exception as e:
             logging.error(f"Error listing audio devices: {e}")
 
+    def _populate_channels(self, device_id: int | None) -> None:
+        """Populate channel combo boxes based on selected device's capabilities."""
+        if self._channel_left_combo is None or self._channel_right_combo is None:
+            return
+            
+        self._channel_left_combo.clear()
+        self._channel_right_combo.clear()
+        
+        if device_id is None:
+            return
+            
+        try:
+            info = self._pyaudio.get_device_info_by_index(device_id)
+            max_channels = int(info.get("maxInputChannels", 2))
+            
+            for i in range(max_channels):
+                self._channel_left_combo.addItem(f"Channel {i}", userData=i)
+                self._channel_right_combo.addItem(f"Channel {i}", userData=i)
+                
+        except Exception as e:
+            logging.error(f"Error getting device info: {e}")
+
     def _load_settings(self) -> None:
         # Audio Device
         current_device_id = self.config.audio_input_device_id
@@ -135,6 +177,21 @@ class SettingsWidget(QtWidgets.QWidget):
             index = self._device_combo.findData(current_device_id)
             if index >= 0:
                 self._device_combo.setCurrentIndex(index)
+                # Populate channels for the current device
+                self._populate_channels(current_device_id)
+        
+        # Load selected channels
+        selected_channels = self.config.audio_selected_channels
+        if len(selected_channels) >= 2:
+            # Set left channel
+            left_idx = self._channel_left_combo.findData(selected_channels[0]) if self._channel_left_combo else -1
+            if left_idx >= 0:
+                self._channel_left_combo.setCurrentIndex(left_idx)
+            
+            # Set right channel
+            right_idx = self._channel_right_combo.findData(selected_channels[1]) if self._channel_right_combo else -1
+            if right_idx >= 0:
+                self._channel_right_combo.setCurrentIndex(right_idx)
         
         # BPM Mode
         mode = self.config.auto_bpm_mode
@@ -153,6 +210,19 @@ class SettingsWidget(QtWidgets.QWidget):
         if device_id is not None:
             self.config.audio_input_device_id = int(device_id)
             logging.info(f"Selected audio device: {device_id}")
+            
+            # Populate channels for the new device
+            self._populate_channels(device_id)
+            
+            # Reset to default channels [0, 1] when device changes
+            if self._channel_left_combo and self._channel_left_combo.count() > 0:
+                self._channel_left_combo.setCurrentIndex(0)
+            if self._channel_right_combo and self._channel_right_combo.count() > 1:
+                self._channel_right_combo.setCurrentIndex(1)
+            
+            # Save default channels
+            self.config.audio_selected_channels = [0, 1]
+            
             # Note: Changing device might require restarting the BeatDetector.
             # We should probably signal this change or let the main app handle it.
             # For now, we just save config. Ideally, we'd emit a signal "settings_changed".
@@ -163,6 +233,38 @@ class SettingsWidget(QtWidgets.QWidget):
         else:
             self.config.auto_bpm_mode = "manual"
         logging.info(f"BPM mode changed to: {self.config.auto_bpm_mode}")
+
+    def _on_channel_changed(self) -> None:
+        """Save selected channels when either channel combo changes."""
+        if self._channel_left_combo is None or self._channel_right_combo is None:
+            return
+            
+        left_channel = self._channel_left_combo.currentData()
+        right_channel = self._channel_right_combo.currentData()
+        
+        if left_channel is not None and right_channel is not None:
+            # Validate against device capabilities
+            device_id = self.config.audio_input_device_id
+            if device_id is not None:
+                try:
+                    info = self._pyaudio.get_device_info_by_index(device_id)
+                    max_channels = int(info.get("maxInputChannels", 2))
+                    
+                    # If selected channels exceed device capabilities, reset to [0, 1]
+                    if left_channel >= max_channels or right_channel >= max_channels:
+                        logging.warning(f"Selected channels [{left_channel}, {right_channel}] exceed device max {max_channels}, resetting to [0, 1]")
+                        left_channel = 0
+                        right_channel = 1
+                        self._channel_left_combo.setCurrentIndex(0)
+                        if self._channel_right_combo.count() > 1:
+                            self._channel_right_combo.setCurrentIndex(1)
+                except Exception as e:
+                    logging.error(f"Error validating channels: {e}")
+                    left_channel = 0
+                    right_channel = 1
+            
+            self.config.audio_selected_channels = [left_channel, right_channel]
+            logging.info(f"Selected channels: {[left_channel, right_channel]}")
 
     def _on_lock_delay_changed(self, state: int) -> None:
         self.config.lock_delay = (state == QtCore.Qt.CheckState.Checked.value)

@@ -64,11 +64,15 @@ class BeatDetector(QObject):
         self.sample_rate = SAMPLE_RATE
         self.buffer_size = BUFFER_SIZE
 
+        # Selected channels for beat detection (stereo)
+        self.selected_channels = self.config.audio_selected_channels
+
         # Calculate buffer sizes (will be recalculated if sample rate changes)
+        # Buffer stores interleaved stereo samples
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
 
-        # Rolling audio buffer (circular buffer using deque)
+        # Rolling audio buffer (circular buffer using deque) - stores stereo samples
         self.buffer_lock = threading.Lock()
         self.audio_buffer: deque = deque(maxlen=self.buffer_samples)
 
@@ -117,7 +121,16 @@ class BeatDetector(QObject):
     def _capture_loop(self) -> None:
         """Thread 1: Audio Capture Loop - dedicated for real-time I/O."""
         input_device_index = self.config.audio_input_device_id
-        channels = self.config.audio_input_channels
+        
+        # Read selected channels from config
+        self.selected_channels = self.config.audio_selected_channels
+        if len(self.selected_channels) < 2:
+            logging.warning(f"Invalid selected_channels {self.selected_channels}, using [0, 1]")
+            self.selected_channels = [0, 1]
+        
+        # We need to open stream with enough channels to cover the highest selected index
+        max_selected_channel = max(self.selected_channels)
+        channels = max_selected_channel + 1
 
         # Resolve device if needed or use default
         if input_device_index is None:
@@ -135,6 +148,16 @@ class BeatDetector(QObject):
             native_rate = int(dev_info.get("defaultSampleRate", 44100))
             max_input_channels = int(dev_info.get("maxInputChannels", 1))
 
+            # Validate selected channels against device capabilities
+            if max_selected_channel >= max_input_channels:
+                logging.warning(
+                    f"Selected channels {self.selected_channels} exceed device max {max_input_channels}. "
+                    f"Falling back to [0, 1]."
+                )
+                self.selected_channels = [0, 1]
+                max_selected_channel = 1
+                channels = 2
+            
             if channels > max_input_channels:
                 logging.warning(
                     f"Requested {channels} channels but device only has "
@@ -181,9 +204,12 @@ class BeatDetector(QObject):
                 audio_data = self.stream.read(self.buffer_size, exception_on_overflow=False)
                 samples = np.frombuffer(audio_data, dtype=np.float32)
 
+                # Extract selected channels and keep as stereo
+                stereo_samples = self._extract_stereo_channels(samples, channels)
+
                 # Append to deque (thread-safe extension)
                 with self.buffer_lock:
-                    self.audio_buffer.extend(samples)
+                    self.audio_buffer.extend(stereo_samples)
 
             except Exception as e:
                 if self.running:
@@ -208,8 +234,9 @@ class BeatDetector(QObject):
 
     def _recalculate_buffer_sizes(self) -> None:
         """Recalculate buffer sizes based on current sample rate."""
-        self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
-        self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
+        # Buffer stores interleaved stereo samples
+        self.buffer_samples = int(BUFFER_DURATION * self.sample_rate * 2)
+        self.update_samples = int(UPDATE_INTERVAL * self.sample_rate * 2)
         with self.buffer_lock:
             self.audio_buffer = deque(maxlen=self.buffer_samples)
 
@@ -257,17 +284,53 @@ class BeatDetector(QObject):
                 pass
             self.stream = None
 
+    def _extract_stereo_channels(
+        self, interleaved_samples: np.ndarray, total_channels: int
+    ) -> np.ndarray:
+        """
+        Extract two selected channels from multi-channel interleaved audio and return as stereo.
+        
+        Args:
+            interleaved_samples: Flat array of interleaved multi-channel samples
+            total_channels: Total number of channels in the interleaved data
+            
+        Returns:
+            Stereo interleaved array (left, right, left, right, ...)
+        """
+        if total_channels == 1:
+            # Mono input - duplicate to stereo
+            return np.repeat(interleaved_samples, 2)
+        
+        # Reshape interleaved data: (samples*channels,) -> (samples, channels)
+        num_frames = len(interleaved_samples) // total_channels
+        reshaped = interleaved_samples[: num_frames * total_channels].reshape(-1, total_channels)
+
+        # Extract selected channels
+        left_channel = reshaped[:, self.selected_channels[0]]
+        right_channel = reshaped[:, self.selected_channels[1]]
+        
+        # Interleave to stereo: (L, R, L, R, ...)
+        stereo = np.empty(num_frames * 2, dtype=np.float32)
+        stereo[0::2] = left_channel
+        stereo[1::2] = right_channel
+        
+        return stereo
+
     def _calculate_bpm(self, audio_data: np.ndarray) -> None:
         """Calculate BPM from the provided audio buffer using Inter-Beat Intervals (IBI)."""
         try:
+            # Convert stereo to mono by averaging channels
+            # audio_data is interleaved stereo: [L, R, L, R, ...]
+            mono_audio = (audio_data[0::2] + audio_data[1::2]) / 2.0
+            
             # Skip if buffer is mostly silence
-            if np.max(np.abs(audio_data)) < 0.01:
+            if np.max(np.abs(mono_audio)) < 0.01:
                 logging.debug("Buffer is silent, skipping BPM calculation")
                 return
 
             # Calculate onset strength envelope
             onset_env = librosa.onset.onset_strength(
-                y=audio_data,
+                y=mono_audio,
                 sr=self.sample_rate,
                 hop_length=HOP_LENGTH,
                 fmax=FMAX,
