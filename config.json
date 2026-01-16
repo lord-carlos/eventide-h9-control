@@ -2,7 +2,7 @@
     "audio": {
         "input_device_id": 2,
         "input_channels": 2,
-        "auto_bpm_mode": "manual"
+        "auto_bpm_mode": "continuous"
     },
     "shortcuts": {
         "keyboard": {

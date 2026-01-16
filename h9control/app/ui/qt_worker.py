@@ -469,18 +469,22 @@ class H9DeviceWorker(QtCore.QObject):
         Returns the newly sent BPM value if successful, None otherwise.
         """
         if self._config.auto_bpm_mode != "continuous":
+            self._logger.debug(f"Auto BPM sync not in continuous mode, skipping")
             return None
         
         if self._live_bpm is None:
+            self._logger.debug(f"No live BPM available, skipping auto-sync") 
             return None
         
         if self._transport is None:
+            self._logger.debug(f"Not connected, skipping auto-sync")
             return None
         
         rounded_bpm = int(round(self._live_bpm))
         
         # Only send if the rounded value has changed
         if rounded_bpm == self._last_sent_auto_bpm:
+            self._logger.debug(f"Auto BPM sync: rounded BPM {rounded_bpm} unchanged, skipping")
             return None
         
         # Clamp to valid range
@@ -688,9 +692,11 @@ class H9DeviceWorker(QtCore.QObject):
             )
 
     def _emit_state(self, state: DashboardState) -> None:
-        if state.live_bpm != self._live_bpm:
+        self._logger.debug(f"_emit_state called: {state}")
+        # Always update live_bpm in state if available, and check for auto-sync
+        if self._live_bpm is not None:
             state = dataclasses.replace(state, live_bpm=self._live_bpm)
-            # Check if auto-sync sent a new BPM and update state accordingly
+            # Check if auto-sync should send BPM to device
             new_bpm = self._check_auto_bpm_sync()
             if new_bpm is not None:
                 state = dataclasses.replace(state, bpm=float(new_bpm))
