@@ -58,9 +58,12 @@ class StandaloneBeatDetector:
     and recalculates BPM every UPDATE_INTERVAL seconds.
     """
 
-    def __init__(self, device_index: int | None = None, channels: int = 1) -> None:
+    def __init__(
+        self, device_index: int | None = None, channels: int = 1, selected_channels: list[int] | None = None
+    ) -> None:
         self.device_index = device_index
-        self.channels = channels
+        self.channels = channels  # Total channels to capture from device
+        self.selected_channels = selected_channels  # Specific channels to extract and mix
         self.running = False
         self.capture_thread: threading.Thread | None = None
         self.analysis_thread: threading.Thread | None = None
@@ -180,6 +183,10 @@ class StandaloneBeatDetector:
                 audio_data = self.stream.read(self.buffer_size, exception_on_overflow=False)
                 samples = np.frombuffer(audio_data, dtype=np.float32)
 
+                # If specific channels are selected, extract and mix them
+                if self.selected_channels is not None and len(self.selected_channels) > 0:
+                    samples = self._extract_and_mix_channels(samples, channels)
+
                 # Append to deque (thread-safe extension)
                 with self.buffer_lock:
                     self.audio_buffer.extend(samples)
@@ -245,6 +252,29 @@ class StandaloneBeatDetector:
         except Exception as e:
             logger.error(f"Failed to open audio stream on device {device_index}: {e}")
             return False
+
+    def _extract_and_mix_channels(
+        self, interleaved_samples: np.ndarray, total_channels: int
+    ) -> np.ndarray:
+        """
+        Extract specific channels from interleaved multi-channel audio and mix them.
+
+        Args:
+            interleaved_samples: Interleaved audio data from PyAudio
+            total_channels: Total number of channels in the audio stream
+
+        Returns:
+            Mono audio data from mixing the selected channels
+        """
+        # Reshape interleaved data: (samples*channels,) -> (samples, channels)
+        num_frames = len(interleaved_samples) // total_channels
+        reshaped = interleaved_samples[: num_frames * total_channels].reshape(-1, total_channels)
+
+        # Extract selected channels and mix them
+        selected_data = reshaped[:, self.selected_channels]  # (num_frames, num_selected_channels)
+        mixed = np.mean(selected_data, axis=1)  # Average across selected channels
+
+        return mixed
 
     def _cleanup_stream(self) -> None:
         """Clean up audio resources."""
@@ -402,6 +432,19 @@ def main() -> None:
         help="Audio device index to use. If not specified, uses default device.",
     )
     parser.add_argument(
+        "--channels",
+        type=int,
+        default=1,
+        help="Number of input channels to capture from the device (default: 1).",
+    )
+    parser.add_argument(
+        "--channel-select",
+        type=str,
+        default=None,
+        help="Specific channels to extract and mix (e.g., '10,11' for channels 11 and 12). "
+        "If not specified, all captured channels are used.",
+    )
+    parser.add_argument(
         "--list-devices",
         action="store_true",
         help="List available audio devices and exit.",
@@ -424,8 +467,21 @@ def main() -> None:
     logger.info("Starting standalone beat detector...")
     if args.device is not None:
         logger.info(f"Using device index: {args.device}")
+    logger.info(f"Capturing {args.channels} channel(s)")
 
-    detector = StandaloneBeatDetector(device_index=args.device, channels=1)
+    # Parse selected channels if provided
+    selected_channels = None
+    if args.channel_select:
+        try:
+            selected_channels = [int(c.strip()) for c in args.channel_select.split(",")]
+            logger.info(f"Mixing channels: {selected_channels}")
+        except ValueError:
+            logger.error(f"Invalid channel selection: {args.channel_select}. Use format: '10,11'")
+            sys.exit(1)
+
+    detector = StandaloneBeatDetector(
+        device_index=args.device, channels=args.channels, selected_channels=selected_channels
+    )
 
     try:
         detector.start()
