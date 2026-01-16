@@ -17,7 +17,7 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 - add to config "ignore these notes" 
 - view for traktor
 - table for min og max value, and what kind of values. See the other repo. 
-- implement other bpm detection algorithm. 
+- [x] implement other bpm detection algorithm. 
 
 
 ## Notes

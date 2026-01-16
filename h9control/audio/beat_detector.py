@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 
 import librosa
 import numpy as np
@@ -55,7 +56,8 @@ class BeatDetector(QObject):
         super().__init__()
         self.config = config
         self.running = False
-        self.thread: threading.Thread | None = None
+        self.capture_thread: threading.Thread | None = None
+        self.analysis_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # Audio parameters (sample rate may be adjusted to device native rate)
@@ -66,9 +68,9 @@ class BeatDetector(QObject):
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
 
-        # Rolling audio buffer (circular buffer using numpy)
-        self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
-        self.samples_since_update = 0
+        # Rolling audio buffer (circular buffer using deque)
+        self.buffer_lock = threading.Lock()
+        self.audio_buffer: deque = deque(maxlen=self.buffer_samples)
 
         # Current BPM value
         self.bpm: float = 0.0
@@ -78,14 +80,21 @@ class BeatDetector(QObject):
         self.stream: pyaudio.Stream | None = None
 
     def start(self) -> None:
-        """Start the beat detection thread."""
+        """Start the beat detection threads."""
         if self.running:
             return
 
         self.running = True
         self._stop_event.clear()
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
-        self.thread.start()
+
+        # Start capture thread
+        self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self.capture_thread.start()
+
+        # Start analysis thread
+        self.analysis_thread = threading.Thread(target=self._analysis_loop, daemon=True)
+        self.analysis_thread.start()
+
         logging.info("BeatDetector started.")
 
     def stop(self) -> None:
@@ -94,13 +103,19 @@ class BeatDetector(QObject):
             return
         self.running = False
         self._stop_event.set()
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=2.0)
-        self.thread = None
+
+        if self.capture_thread and self.capture_thread.is_alive():
+            self.capture_thread.join(timeout=2.0)
+        self.capture_thread = None
+
+        if self.analysis_thread and self.analysis_thread.is_alive():
+            self.analysis_thread.join(timeout=2.0)
+        self.analysis_thread = None
+
         logging.info("BeatDetector stopped.")
 
-    def _run_loop(self) -> None:
-        """Main thread loop - capture audio and periodically calculate BPM."""
+    def _capture_loop(self) -> None:
+        """Thread 1: Audio Capture Loop - dedicated for real-time I/O."""
         input_device_index = self.config.audio_input_device_id
         channels = self.config.audio_input_channels
 
@@ -159,16 +174,9 @@ class BeatDetector(QObject):
                 audio_data = self.stream.read(self.buffer_size, exception_on_overflow=False)
                 samples = np.frombuffer(audio_data, dtype=np.float32)
 
-                # Roll buffer and add new samples
-                self.audio_buffer = np.roll(self.audio_buffer, -len(samples))
-                self.audio_buffer[-len(samples) :] = samples
-
-                self.samples_since_update += len(samples)
-
-                # Recalculate BPM at update interval
-                if self.samples_since_update >= self.update_samples:
-                    self._calculate_bpm()
-                    self.samples_since_update = 0
+                # Append to deque (thread-safe extension)
+                with self.buffer_lock:
+                    self.audio_buffer.extend(samples)
 
             except Exception as e:
                 if self.running:
@@ -177,11 +185,26 @@ class BeatDetector(QObject):
 
         self._cleanup_stream()
 
+    def _analysis_loop(self) -> None:
+        """Thread 2: Analysis Loop - heavy processing without blocking capture."""
+        while self.running and not self._stop_event.is_set():
+            time.sleep(UPDATE_INTERVAL)
+
+            snapshot = None
+            with self.buffer_lock:
+                # Check if we have enough data (at least a significant portion of buffer)
+                if len(self.audio_buffer) >= self.update_samples:
+                    snapshot = np.array(self.audio_buffer, dtype=np.float32)
+
+            if snapshot is not None and len(snapshot) > 0:
+                self._calculate_bpm(snapshot)
+
     def _recalculate_buffer_sizes(self) -> None:
         """Recalculate buffer sizes based on current sample rate."""
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
-        self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
+        with self.buffer_lock:
+            self.audio_buffer = deque(maxlen=self.buffer_samples)
 
     def _find_fallback_device(self, channels: int) -> int | None:
         """Find a fallback input device if the configured one fails."""
@@ -227,17 +250,17 @@ class BeatDetector(QObject):
                 pass
             self.stream = None
 
-    def _calculate_bpm(self) -> None:
-        """Calculate BPM from the current audio buffer using Inter-Beat Intervals (IBI)."""
+    def _calculate_bpm(self, audio_data: np.ndarray) -> None:
+        """Calculate BPM from the provided audio buffer using Inter-Beat Intervals (IBI)."""
         try:
             # Skip if buffer is mostly silence
-            if np.max(np.abs(self.audio_buffer)) < 0.01:
+            if np.max(np.abs(audio_data)) < 0.01:
                 logging.debug("Buffer is silent, skipping BPM calculation")
                 return
 
             # Calculate onset strength envelope
             onset_env = librosa.onset.onset_strength(
-                y=self.audio_buffer,
+                y=audio_data,
                 sr=self.sample_rate,
                 hop_length=HOP_LENGTH,
                 fmax=FMAX,
