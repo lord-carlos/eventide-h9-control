@@ -8,6 +8,29 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from h9control.app.config import ConfigManager
 
+# Touch-friendly sizing constants
+COMBOBOX_MIN_HEIGHT = 50  # Minimum height for dropdown selectors
+COMBOBOX_MIN_WIDTH = 400  # Minimum width for better touch targets
+CHECKBOX_MIN_HEIGHT = 44  # Minimum height for checkbox containers
+RADIO_BUTTON_MIN_HEIGHT = 44  # Minimum height for radio button containers
+TOUCH_SPACING = 24  # Spacing between form rows for touch accuracy
+CONTROL_FONT_SIZE = 14  # Font size for interactive controls (increased from 12)
+
+# Stylesheet for larger checkbox and radio button indicators
+CHECKBOX_STYLESHEET = """
+    QCheckBox::indicator {
+        width: 24px;
+        height: 24px;
+    }
+"""
+
+RADIO_BUTTON_STYLESHEET = """
+    QRadioButton::indicator {
+        width: 24px;
+        height: 24px;
+    }
+"""
+
 
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
@@ -41,13 +64,15 @@ class SettingsWidget(QtWidgets.QWidget):
         form_layout = QtWidgets.QFormLayout()
         form_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
         form_layout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop)
-        form_layout.setSpacing(15)
+        form_layout.setSpacing(TOUCH_SPACING)
 
         # TODO: Add knob_order to settings UI (configurable list of which knobs to display and in what order)
 
         # Audio Device
         self._device_combo = QtWidgets.QComboBox()
-        self._device_combo.setMinimumWidth(300)
+        self._device_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
+        self._device_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
+        self._device_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._populate_devices()
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
         
@@ -57,7 +82,9 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # Channel Selection - Left Channel
         self._channel_left_combo = QtWidgets.QComboBox()
-        self._channel_left_combo.setMinimumWidth(300)
+        self._channel_left_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
+        self._channel_left_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
+        self._channel_left_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._channel_left_combo.currentIndexChanged.connect(self._on_channel_changed)
         
         lbl_channel_left = QtWidgets.QLabel("Left Channel:")
@@ -66,7 +93,9 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # Channel Selection - Right Channel
         self._channel_right_combo = QtWidgets.QComboBox()
-        self._channel_right_combo.setMinimumWidth(300)
+        self._channel_right_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
+        self._channel_right_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
+        self._channel_right_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._channel_right_combo.currentIndexChanged.connect(self._on_channel_changed)
         
         lbl_channel_right = QtWidgets.QLabel("Right Channel:")
@@ -78,8 +107,12 @@ class SettingsWidget(QtWidgets.QWidget):
         self._bpm_mode_manual = QtWidgets.QRadioButton("Manual (Current)")
         self._bpm_mode_continuous = QtWidgets.QRadioButton("Continuous")
         
-        self._bpm_mode_manual.setFont(QtGui.QFont("Arial", 12))
-        self._bpm_mode_continuous.setFont(QtGui.QFont("Arial", 12))
+        self._bpm_mode_manual.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._bpm_mode_continuous.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._bpm_mode_manual.setMinimumHeight(RADIO_BUTTON_MIN_HEIGHT)
+        self._bpm_mode_continuous.setMinimumHeight(RADIO_BUTTON_MIN_HEIGHT)
+        self._bpm_mode_manual.setStyleSheet(RADIO_BUTTON_STYLESHEET)
+        self._bpm_mode_continuous.setStyleSheet(RADIO_BUTTON_STYLESHEET)
 
         self._bpm_mode_group.addButton(self._bpm_mode_manual)
         self._bpm_mode_group.addButton(self._bpm_mode_continuous)
@@ -97,7 +130,9 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # Lock Delay Checkbox
         self._lock_delay_checkbox = QtWidgets.QCheckBox("Lock Delay A/B Together")
-        self._lock_delay_checkbox.setFont(QtGui.QFont("Arial", 12))
+        self._lock_delay_checkbox.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._lock_delay_checkbox.setMinimumHeight(CHECKBOX_MIN_HEIGHT)
+        self._lock_delay_checkbox.setStyleSheet(CHECKBOX_STYLESHEET)
         self._lock_delay_checkbox.stateChanged.connect(self._on_lock_delay_changed)
         
         lbl_lock_delay = QtWidgets.QLabel("Delay Lock:")
@@ -106,7 +141,9 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # Lock Feedback Checkbox
         self._lock_feedback_checkbox = QtWidgets.QCheckBox("Lock Feedback A/B Together")
-        self._lock_feedback_checkbox.setFont(QtGui.QFont("Arial", 12))
+        self._lock_feedback_checkbox.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._lock_feedback_checkbox.setMinimumHeight(CHECKBOX_MIN_HEIGHT)
+        self._lock_feedback_checkbox.setStyleSheet(CHECKBOX_STYLESHEET)
         self._lock_feedback_checkbox.stateChanged.connect(self._on_lock_feedback_changed)
         
         lbl_lock_feedback = QtWidgets.QLabel("Feedback Lock:")
@@ -115,7 +152,9 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # Lock Pitch Checkbox
         self._lock_pitch_checkbox = QtWidgets.QCheckBox("Lock Pitch A/B Together")
-        self._lock_pitch_checkbox.setFont(QtGui.QFont("Arial", 12))
+        self._lock_pitch_checkbox.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._lock_pitch_checkbox.setMinimumHeight(CHECKBOX_MIN_HEIGHT)
+        self._lock_pitch_checkbox.setStyleSheet(CHECKBOX_STYLESHEET)
         self._lock_pitch_checkbox.stateChanged.connect(self._on_lock_pitch_changed)
         
         lbl_lock_pitch = QtWidgets.QLabel("Pitch Lock:")
