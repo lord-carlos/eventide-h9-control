@@ -151,13 +151,20 @@ class StandaloneBeatDetector:
                 )
                 channels = max_input_channels
 
-            # Update sample rate to match device native rate (avoid resampling artifacts)
-            if native_rate != self.sample_rate:
-                logger.debug(
-                    f"Switching to native device rate: {native_rate} (was {self.sample_rate})"
-                )
-                self.sample_rate = native_rate
-                self._recalculate_buffer_sizes()
+            # Check if SAMPLE_RATE is explicitly set (non-zero, non-empty)
+            if SAMPLE_RATE and SAMPLE_RATE > 0:
+                # Force configured sample rate
+                logger.warning(f"Forcing sample rate to {SAMPLE_RATE}Hz (device native: {native_rate}Hz)")
+                self.sample_rate = SAMPLE_RATE
+            else:
+                # Use device native rate (avoid resampling artifacts)
+                if native_rate != self.sample_rate:
+                    logger.debug(
+                        f"Using native device rate: {native_rate}Hz (was {self.sample_rate}Hz)"
+                    )
+                    self.sample_rate = native_rate
+            
+            self._recalculate_buffer_sizes()
 
         except Exception as e:
             logger.error(f"Error getting device info for device {input_device_index}: {e}")
