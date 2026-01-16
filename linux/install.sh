@@ -36,8 +36,7 @@ sudo apt install -y \
     libasound2-dev \
     libjack-jackd2-dev \
     portaudio19-dev \
-    libaubio-dev \
-    libaubio5 \
+    libsndfile1 \
     libgpiod2 \
     python3-dev \
     gpiod

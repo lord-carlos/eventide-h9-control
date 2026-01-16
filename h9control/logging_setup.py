@@ -24,3 +24,9 @@ def configure_logging(*, cli_level: str | None = None) -> None:
         datefmt="%H:%M:%S",
         force=True,
     )
+
+    # Silence noisy third-party libraries even at DEBUG level
+    # These libraries output excessive internal details that clutter logs
+    logging.getLogger("numba").setLevel(logging.WARNING)
+    logging.getLogger("numba.core").setLevel(logging.WARNING)
+    logging.getLogger("librosa").setLevel(logging.INFO)

@@ -1,23 +1,54 @@
+"""Librosa-based beat detector with rolling buffer and Qt signal integration."""
+
 from __future__ import annotations
 
 import logging
 import threading
 import time
 
+import librosa
 import numpy as np
 import pyaudio
 from PySide6.QtCore import QObject, Signal
 
-try:
-    import aubio
-except ImportError:
-    aubio = None
-    logging.warning("aubio not found. Beat detection will not work.")
-
 from h9control.app.config import ConfigManager
 
 
+# =============================================================================
+# CONFIGURABLE PARAMETERS - Tune these for CPU/accuracy tradeoff
+# =============================================================================
+
+# Audio capture settings
+SAMPLE_RATE = 44100  # Lower = less CPU (22050 for Pi, 44100 for high accuracy)
+BUFFER_SIZE = 1024  # PyAudio buffer size per read (samples)
+
+# Rolling buffer settings
+BUFFER_DURATION = 8.0  # Seconds of audio to keep in rolling buffer
+UPDATE_INTERVAL = 2.0  # Seconds between BPM recalculations
+
+# Librosa beat_track parameters
+HOP_LENGTH = 256  # Hop length for onset detection (larger = faster, less accurate)
+START_BPM = 120.0  # Starting tempo estimate for beat tracking
+
+# Smoothing
+ENABLE_SMOOTHING = True  # Enable smoothing of BPM over time (exponential moving average)
+SMOOTHING_ALPHA = 0.6  # Weight for new detection (0.0-1.0). Higher = more responsive.
+
+# Onset strength parameters
+DETREND = False  # Detrend onset envelope (can help with some audio)
+CENTER = True  # Center the onset envelope
+FMAX = 8000.0  # Max frequency for mel spectrogram (lower = less CPU)
+FMIN = 20.0  # Min frequency for mel spectrogram
+
+
 class BeatDetector(QObject):
+    """
+    Beat detector using librosa with a rolling audio buffer.
+
+    Captures audio continuously, maintains a rolling buffer of BUFFER_DURATION seconds,
+    and recalculates BPM every UPDATE_INTERVAL seconds.
+    """
+
     bpm_detected = Signal(float)
 
     def __init__(self, config: ConfigManager) -> None:
@@ -27,26 +58,28 @@ class BeatDetector(QObject):
         self.thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
-        # Audio parameters
-        self.buffer_size = 64
-        self.window_multiple = 32
-        self.format = pyaudio.paFloat32
-        # We might need to adjust channels based on device capabilities, but config has preference
-        
-        #Ugly hack
-        self.BPM_CALIBRATION = 0.9974
-        
+        # Audio parameters (sample rate may be adjusted to device native rate)
+        self.sample_rate = SAMPLE_RATE
+        self.buffer_size = BUFFER_SIZE
+
+        # Calculate buffer sizes (will be recalculated if sample rate changes)
+        self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
+        self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
+
+        # Rolling audio buffer (circular buffer using numpy)
+        self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
+        self.samples_since_update = 0
+
+        # Current BPM value
+        self.bpm: float = 0.0
+
+        # PyAudio setup
         self.p = pyaudio.PyAudio()
         self.stream: pyaudio.Stream | None = None
 
-        self.bpm_estimates: list[float] = []
-
     def start(self) -> None:
+        """Start the beat detection thread."""
         if self.running:
-            return
-
-        if aubio is None:
-            logging.error("Cannot start BeatDetector: aubio is missing.")
             return
 
         self.running = True
@@ -56,6 +89,7 @@ class BeatDetector(QObject):
         logging.info("BeatDetector started.")
 
     def stop(self) -> None:
+        """Stop the beat detection thread."""
         if not self.running:
             return
         self.running = False
@@ -66,161 +100,240 @@ class BeatDetector(QObject):
         logging.info("BeatDetector stopped.")
 
     def _run_loop(self) -> None:
+        """Main thread loop - capture audio and periodically calculate BPM."""
         input_device_index = self.config.audio_input_device_id
         channels = self.config.audio_input_channels
 
         # Resolve device if needed or use default
         if input_device_index is None:
-            # Try to find a default input device
             try:
                 default_info = self.p.get_default_input_device_info()
                 input_device_index = int(default_info["index"])
-                # Update config with detected default? Maybe not, keep it None to always use default.
             except OSError:
                 logging.error("No default input device found.")
                 self.running = False
                 return
 
-        # Get device info for sample rate
+        # Get device info and adjust sample rate to native rate
         try:
             dev_info = self.p.get_device_info_by_index(input_device_index)
-            sample_rate = int(dev_info.get("defaultSampleRate", 44100))
+            native_rate = int(dev_info.get("defaultSampleRate", 44100))
             max_input_channels = int(dev_info.get("maxInputChannels", 1))
+
             if channels > max_input_channels:
-                logging.warning(f"Requested {channels} channels but device only has {max_input_channels}. Using {max_input_channels}.")
+                logging.warning(
+                    f"Requested {channels} channels but device only has "
+                    f"{max_input_channels}. Using {max_input_channels}."
+                )
                 channels = max_input_channels
+
+            # Update sample rate to match device native rate (avoid resampling artifacts)
+            if native_rate != self.sample_rate:
+                logging.debug(
+                    f"Switching to native device rate: {native_rate} (was {self.sample_rate})"
+                )
+                self.sample_rate = native_rate
+                self._recalculate_buffer_sizes()
+
         except Exception as e:
             logging.error(f"Error getting device info for device {input_device_index}: {e}")
-            
-            # Fallback: find first available input device
-            fallback_device = None
-            fallback_info = None
-            try:
-                count = self.p.get_device_count()
-                for i in range(count):
-                    info = self.p.get_device_info_by_index(i)
-                    if info.get("maxInputChannels", 0) > 0:
-                        # Try to verify this device is actually usable by checking if we can get its info
-                        try:
-                            # Store both device index and info for later use
-                            fallback_device = i
-                            fallback_info = info
-                            logging.warning(f"Falling back to device {i}: {info.get('name', 'Unknown')}")
-                            break
-                        except Exception:
-                            continue
-            except Exception as fallback_error:
-                logging.error(f"Failed to find fallback device: {fallback_error}")
-            
-            if fallback_device is not None and fallback_info is not None:
-                input_device_index = fallback_device
-                try:
-                    dev_info = fallback_info
-                    sample_rate = int(dev_info.get("defaultSampleRate", 44100))
-                    max_input_channels = int(dev_info.get("maxInputChannels", 1))
-                    if channels > max_input_channels:
-                        logging.warning(f"Fallback device only has {max_input_channels} channels (requested {channels}). Using {max_input_channels}.")
-                        channels = max_input_channels
-                except Exception as dev_error:
-                    logging.error(f"Failed to get fallback device info: {dev_error}")
-                    self.running = False
-                    return
-            else:
-                logging.error("No audio input devices available. Beat detection disabled.")
+            input_device_index = self._find_fallback_device(channels)
+            if input_device_index is None:
                 self.running = False
                 return
 
-        win_size = self.buffer_size * self.window_multiple
-
-        # Try to open the audio stream, with fallback to other devices if it fails
-        stream_opened = False
-        devices_to_try = [input_device_index]
-        
-        # If the current device fails, try other available input devices
-        if not stream_opened:
-            try:
-                count = self.p.get_device_count()
-                for i in range(count):
-                    if i != input_device_index:
-                        info = self.p.get_device_info_by_index(i)
-                        if info.get("maxInputChannels", 0) > 0:
-                            devices_to_try.append(i)
-            except Exception:
-                pass
-        
-        for device_idx in devices_to_try:
-            try:
-                # Get fresh device info for each attempt
-                dev_info = self.p.get_device_info_by_index(device_idx)
-                device_sample_rate = int(dev_info.get("defaultSampleRate", 44100))
-                device_channels = min(channels, int(dev_info.get("maxInputChannels", 1)))
-                
-                logging.debug(f"Attempting to open audio stream: device={device_idx} ({dev_info.get('name', 'Unknown')}), channels={device_channels}, rate={device_sample_rate}")
-                
-                # Initialize aubio tempo
-                tempo_detect = aubio.tempo("default", win_size, self.buffer_size, device_sample_rate)
-
-                self.stream = self.p.open(
-                    format=self.format,
-                    channels=device_channels,
-                    rate=device_sample_rate,
-                    input=True,
-                    frames_per_buffer=self.buffer_size,
-                    input_device_index=device_idx,
-                )
-                
-                # Success!
-                input_device_index = device_idx
-                sample_rate = device_sample_rate
-                channels = device_channels
-                stream_opened = True
-                if device_idx != devices_to_try[0]:
-                    logging.warning(f"Successfully opened fallback device {device_idx}: {dev_info.get('name', 'Unknown')}")
-                break
-                
-            except Exception as e:
-                if device_idx == devices_to_try[-1]:  # Last device
-                    logging.error(f"Failed to open audio stream on device {device_idx}: {e}")
-                else:
-                    logging.debug(f"Failed to open audio stream on device {device_idx}: {e}, trying next device...")
-                continue
-        
-        if not stream_opened:
-            logging.error("Could not open any audio input device. Beat detection disabled.")
+        # Try to open audio stream
+        if not self._open_stream(input_device_index, channels):
             self.running = False
             return
 
-        logging.info(f"Listening for beats on device {input_device_index} at {sample_rate}Hz")
+        logging.info(
+            f"Listening for beats on device {input_device_index} at {self.sample_rate}Hz "
+            f"(buffer: {BUFFER_DURATION}s, update: {UPDATE_INTERVAL}s)"
+        )
 
+        # Main capture loop
+        assert self.stream is not None
         while self.running and not self._stop_event.is_set():
             try:
-                data = self.stream.read(self.buffer_size, exception_on_overflow=False)
-                samples = np.frombuffer(data, dtype=np.float32)
+                audio_data = self.stream.read(self.buffer_size, exception_on_overflow=False)
+                samples = np.frombuffer(audio_data, dtype=np.float32)
 
-                if tempo_detect(samples):
-                    bpm = tempo_detect.get_bpm()
-                    if bpm:
-                        self._process_bpm(bpm)
+                # Roll buffer and add new samples
+                self.audio_buffer = np.roll(self.audio_buffer, -len(samples))
+                self.audio_buffer[-len(samples) :] = samples
+
+                self.samples_since_update += len(samples)
+
+                # Recalculate BPM at update interval
+                if self.samples_since_update >= self.update_samples:
+                    self._calculate_bpm()
+                    self.samples_since_update = 0
+
             except Exception as e:
-                logging.error(f"Error in beat detection loop: {e}")
-                time.sleep(0.1)  # Avoid tight loop on error
+                if self.running:
+                    logging.error(f"Error reading audio: {e}")
+                    time.sleep(0.1)
 
+        self._cleanup_stream()
+
+    def _recalculate_buffer_sizes(self) -> None:
+        """Recalculate buffer sizes based on current sample rate."""
+        self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
+        self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
+        self.audio_buffer = np.zeros(self.buffer_samples, dtype=np.float32)
+
+    def _find_fallback_device(self, channels: int) -> int | None:
+        """Find a fallback input device if the configured one fails."""
+        try:
+            count = self.p.get_device_count()
+            for i in range(count):
+                info = self.p.get_device_info_by_index(i)
+                if int(info.get("maxInputChannels", 0)) > 0:
+                    logging.warning(f"Falling back to device {i}: {info.get('name', 'Unknown')}")
+                    return i
+        except Exception as e:
+            logging.error(f"Failed to find fallback device: {e}")
+        logging.error("No audio input devices available. Beat detection disabled.")
+        return None
+
+    def _open_stream(self, device_index: int, channels: int) -> bool:
+        """Open the PyAudio stream. Returns True on success."""
+        try:
+            dev_info = self.p.get_device_info_by_index(device_index)
+            max_channels = int(dev_info.get("maxInputChannels", 1))
+            actual_channels = min(channels, max_channels)
+
+            self.stream = self.p.open(
+                format=pyaudio.paFloat32,
+                channels=actual_channels,
+                rate=self.sample_rate,
+                input=True,
+                frames_per_buffer=self.buffer_size,
+                input_device_index=device_index,
+            )
+            return True
+        except Exception as e:
+            logging.error(f"Failed to open audio stream on device {device_index}: {e}")
+            return False
+
+    def _cleanup_stream(self) -> None:
+        """Clean up audio resources."""
         if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
+            try:
+                self.stream.stop_stream()
+                self.stream.close()
+            except Exception:
+                pass
             self.stream = None
 
-    def _process_bpm(self, raw_bpm: float) -> None:
-        self.bpm_estimates.append(raw_bpm)
-        
-        # Keep last 10 estimates for median smoothing
-        max_samples = 10
-        if len(self.bpm_estimates) > max_samples:
-            self.bpm_estimates.pop(0)
+    def _calculate_bpm(self) -> None:
+        """Calculate BPM from the current audio buffer using Inter-Beat Intervals (IBI)."""
+        try:
+            # Skip if buffer is mostly silence
+            if np.max(np.abs(self.audio_buffer)) < 0.01:
+                logging.debug("Buffer is silent, skipping BPM calculation")
+                return
 
-        if self.bpm_estimates:
-            median_bpm = float(np.median(self.bpm_estimates))
-            self.bpm_detected.emit(round(median_bpm * self.BPM_CALIBRATION, 1))
+            # Calculate onset strength envelope
+            onset_env = librosa.onset.onset_strength(
+                y=self.audio_buffer,
+                sr=self.sample_rate,
+                hop_length=HOP_LENGTH,
+                fmax=FMAX,
+                center=CENTER,
+                detrend=DETREND,
+            )
+
+            # Adaptive starting BPM: if we have a valid previous reading, use it
+            # This prevents octave jumps (60 vs 120) and helps lock on
+            current_start_bpm = self.bpm if self.bpm > 0 else START_BPM
+
+            # Use beat_track to find beat locations
+            # tightness=100 helps lock onto stable beats in electronic music
+            tempo, beats = librosa.beat.beat_track(
+                onset_envelope=onset_env,
+                sr=self.sample_rate,
+                hop_length=HOP_LENGTH,
+                start_bpm=current_start_bpm,
+                tightness=100,
+            )
+
+            if len(beats) < 2:
+                logging.debug("Not enough beats detected")
+                return
+
+            # Refine beat locations using parabolic interpolation for sub-frame accuracy
+            refined_beats = self._refine_beats(beats, onset_env)
+
+            # Analyze beat timestamps for higher precision
+            beat_times = refined_beats * HOP_LENGTH / self.sample_rate
+            ibis = np.diff(beat_times)
+
+            # Filter out unreasonable intervals (outside 40-220 BPM range)
+            # 220 BPM ~= 0.27s, 40 BPM = 1.5s
+            valid_ibis = ibis[(ibis > 0.27) & (ibis < 1.5)]
+
+            if len(valid_ibis) == 0:
+                logging.debug("No valid beat intervals found")
+                return
+
+            # Cluster Averaging for precision
+            raw_bpm = self._calculate_bpm_from_ibis(valid_ibis)
+
+            # Apply smoothing if enabled
+            if ENABLE_SMOOTHING and self.bpm > 0:
+                new_bpm = (self.bpm * (1 - SMOOTHING_ALPHA)) + (raw_bpm * SMOOTHING_ALPHA)
+                self.bpm = round(new_bpm, 1)
+            else:
+                self.bpm = round(raw_bpm, 1)
+
+            logging.debug(f"BPM detected: {self.bpm} (raw: {raw_bpm:.2f})")
+
+            # Emit signal for UI
+            self.bpm_detected.emit(self.bpm)
+
+        except Exception as e:
+            logging.error(f"Error calculating BPM: {e}")
+
+    def _refine_beats(self, beats: np.ndarray, onset_env: np.ndarray) -> np.ndarray:
+        """Refine beat locations using parabolic interpolation for sub-frame accuracy."""
+        refined_beats = []
+        for b in beats:
+            if 0 < b < len(onset_env) - 1:
+                alpha = onset_env[b - 1]
+                beta = onset_env[b]
+                gamma = onset_env[b + 1]
+
+                # Only interpolate if distinct local peak
+                denom = alpha - 2 * beta + gamma
+                if beta >= alpha and beta >= gamma and denom != 0:
+                    p = 0.5 * (alpha - gamma) / denom
+                    refined_beats.append(b + p)
+                else:
+                    refined_beats.append(b)
+            else:
+                refined_beats.append(b)
+        return np.array(refined_beats)
+
+    def _calculate_bpm_from_ibis(self, valid_ibis: np.ndarray) -> float:
+        """Calculate BPM from inter-beat intervals using cluster averaging."""
+        # Get the median to find the "center" of the rhythm (rejects outliers)
+        median_ibi = np.median(valid_ibis)
+
+        # Select intervals within 5% of the median (rejects missed/double beats)
+        tolerance = 0.05
+        cluster_ibis = valid_ibis[np.abs(valid_ibis - median_ibi) <= (tolerance * median_ibi)]
+
+        # Take the MEAN of this cluster for sub-sample precision
+        if len(cluster_ibis) > 0:
+            mean_ibi = float(np.mean(cluster_ibis))
+            return 60.0 / mean_ibi
+        return 60.0 / float(median_ibi)
 
     def __del__(self) -> None:
-        self.p.terminate()
+        """Cleanup PyAudio on deletion."""
+        try:
+            self.p.terminate()
+        except Exception:
+            pass
