@@ -220,16 +220,20 @@ class SettingsWidget(QtWidgets.QWidget):
             self._channel_right_combo.blockSignals(False)
 
     def _load_settings(self) -> None:
-        # Audio Device
+        # Audio Device - restore saved device if it exists
         current_device_id = self.config.audio_input_device_id
         if current_device_id is not None:
             index = self._device_combo.findData(current_device_id)
             if index >= 0:
                 self._device_combo.setCurrentIndex(index)
-                # Populate channels for the current device
-                self._populate_channels(current_device_id)
         
-        # Load selected channels
+        # Always populate channels based on currently selected device
+        # (handles first run, missing saved device, or device at index 0)
+        selected_device_id = self._device_combo.currentData()
+        if selected_device_id is not None:
+            self._populate_channels(selected_device_id)
+        
+        # Load selected channels after population ensures items exist
         selected_channels = self.config.audio_selected_channels
         if len(selected_channels) >= 2:
             # Set left channel
