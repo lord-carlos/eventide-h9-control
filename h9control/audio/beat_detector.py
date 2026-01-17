@@ -68,7 +68,6 @@ class BeatDetector(QObject):
         self.selected_channels = self.config.audio_selected_channels
 
         # Calculate buffer sizes (will be recalculated if sample rate changes)
-        # Buffer stores interleaved stereo samples
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
 

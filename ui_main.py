@@ -66,6 +66,13 @@ def main() -> None:
     beat_detector.bpm_detected.connect(worker.update_live_bpm, QtCore.Qt.ConnectionType.QueuedConnection)
     beat_detector.start()
 
+    # Restart beat detector when audio settings change
+    def restart_beat_detector() -> None:
+        beat_detector.stop()
+        beat_detector.start()
+    
+    window.settings.audio_settings_changed.connect(restart_beat_detector, QtCore.Qt.ConnectionType.QueuedConnection)
+
     app.aboutToQuit.connect(worker.shutdown)
     app.aboutToQuit.connect(beat_detector.stop)
     app.aboutToQuit.connect(thread.quit)

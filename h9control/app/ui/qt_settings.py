@@ -35,6 +35,7 @@ RADIO_BUTTON_STYLESHEET = """
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
     settings_changed = QtCore.Signal()  # Emitted when settings change that affect UI
+    audio_settings_changed = QtCore.Signal()  # Emitted when audio device/channel settings change
 
     def __init__(self, config: ConfigManager) -> None:
         super().__init__()
@@ -191,23 +192,32 @@ class SettingsWidget(QtWidgets.QWidget):
         """Populate channel combo boxes based on selected device's capabilities."""
         if self._channel_left_combo is None or self._channel_right_combo is None:
             return
-            
-        self._channel_left_combo.clear()
-        self._channel_right_combo.clear()
         
-        if device_id is None:
-            return
-            
+        # Block signals to prevent triggering _on_channel_changed during population
+        self._channel_left_combo.blockSignals(True)
+        self._channel_right_combo.blockSignals(True)
+        
         try:
-            info = self._pyaudio.get_device_info_by_index(device_id)
-            max_channels = int(info.get("maxInputChannels", 2))
+            self._channel_left_combo.clear()
+            self._channel_right_combo.clear()
             
-            for i in range(max_channels):
-                self._channel_left_combo.addItem(f"Channel {i}", userData=i)
-                self._channel_right_combo.addItem(f"Channel {i}", userData=i)
+            if device_id is None:
+                return
                 
-        except Exception as e:
-            logging.error(f"Error getting device info: {e}")
+            try:
+                info = self._pyaudio.get_device_info_by_index(device_id)
+                max_channels = int(info.get("maxInputChannels", 2))
+                
+                for i in range(max_channels):
+                    self._channel_left_combo.addItem(f"Channel {i}", userData=i)
+                    self._channel_right_combo.addItem(f"Channel {i}", userData=i)
+                    
+            except Exception as e:
+                logging.error(f"Error getting device info: {e}")
+        finally:
+            # Always re-enable signals
+            self._channel_left_combo.blockSignals(False)
+            self._channel_right_combo.blockSignals(False)
 
     def _load_settings(self) -> None:
         # Audio Device
@@ -250,21 +260,33 @@ class SettingsWidget(QtWidgets.QWidget):
             self.config.audio_input_device_id = int(device_id)
             logging.info(f"Selected audio device: {device_id}")
             
-            # Populate channels for the new device
+            # Populate channels for the new device (signals already blocked inside)
             self._populate_channels(device_id)
             
-            # Reset to default channels [0, 1] when device changes
-            if self._channel_left_combo and self._channel_left_combo.count() > 0:
-                self._channel_left_combo.setCurrentIndex(0)
-            if self._channel_right_combo and self._channel_right_combo.count() > 1:
-                self._channel_right_combo.setCurrentIndex(1)
+            # Block signals while setting default channels to prevent duplicate saves
+            if self._channel_left_combo:
+                self._channel_left_combo.blockSignals(True)
+            if self._channel_right_combo:
+                self._channel_right_combo.blockSignals(True)
             
-            # Save default channels
-            self.config.audio_selected_channels = [0, 1]
+            try:
+                # Reset to default channels [0, 1] when device changes
+                if self._channel_left_combo and self._channel_left_combo.count() > 0:
+                    self._channel_left_combo.setCurrentIndex(0)
+                if self._channel_right_combo and self._channel_right_combo.count() > 1:
+                    self._channel_right_combo.setCurrentIndex(1)
+                
+                # Save default channels
+                self.config.audio_selected_channels = [0, 1]
+            finally:
+                # Re-enable signals
+                if self._channel_left_combo:
+                    self._channel_left_combo.blockSignals(False)
+                if self._channel_right_combo:
+                    self._channel_right_combo.blockSignals(False)
             
-            # Note: Changing device might require restarting the BeatDetector.
-            # We should probably signal this change or let the main app handle it.
-            # For now, we just save config. Ideally, we'd emit a signal "settings_changed".
+            # Signal that audio settings changed, requiring beat detector restart
+            self.audio_settings_changed.emit()
 
     def _on_bpm_mode_changed(self, button: QtWidgets.QAbstractButton) -> None:
         if button == self._bpm_mode_continuous:
@@ -279,7 +301,7 @@ class SettingsWidget(QtWidgets.QWidget):
             return
             
         left_channel = self._channel_left_combo.currentData()
-        right_channel = self._channel_right_combo.currentData()
+        right_channel = self._channel_right_combo.currentData()# here we get 0,0
         
         if left_channel is not None and right_channel is not None:
             # Validate against device capabilities
@@ -304,6 +326,7 @@ class SettingsWidget(QtWidgets.QWidget):
             
             self.config.audio_selected_channels = [left_channel, right_channel]
             logging.info(f"Selected channels: {[left_channel, right_channel]}")
+            self.audio_settings_changed.emit()
 
     def _on_lock_delay_changed(self, state: int) -> None:
         self.config.lock_delay = (state == QtCore.Qt.CheckState.Checked.value)
