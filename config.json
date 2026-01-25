@@ -98,8 +98,8 @@
                 "action_cw": "adjust_knob_3_up",
                 "action_ccw": "adjust_knob_3_down"
             },"knob_4_encoder": {
-                "clk_pin": 7,
-                "dt_pin": 0,
+                "clk_pin": 20,
+                "dt_pin": 16,
                 "action_cw": "adjust_knob_4_up",
                 "action_ccw": "adjust_knob_4_down"
             }
