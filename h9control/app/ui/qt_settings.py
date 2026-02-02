@@ -95,6 +95,8 @@ class SettingsWidget(QtWidgets.QWidget):
         scroll_area.setVerticalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
+        # Enable touch events for grab-and-scroll behavior
+        scroll_area.setAttribute(QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         scroll_area.setStyleSheet("""
             QScrollArea {
                 border: none;
@@ -115,6 +117,7 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # Form widget and layout inside scroll area
         form_widget = QtWidgets.QWidget()
+        form_widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         form_layout = QtWidgets.QFormLayout(form_widget)
         form_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
         form_layout.setFormAlignment(
