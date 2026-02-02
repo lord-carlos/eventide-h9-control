@@ -47,6 +47,15 @@ FMIN = 20.0  # Min frequency for mel spectrogram
 # Performance settings
 MONO_MODE = False  # Set to True to use only first channel (halves CPU/USB bandwidth)
 
+# BPM detection settings
+MIN_BPM = 80.0  # Minimum detectable BPM
+MAX_BPM = 180.0  # Maximum detectable BPM
+START_BPM = 120.0  # Initial tempo estimate
+SILENCE_THRESHOLD = 0.05  # Skip BPM calc when audio below this level
+HOLD_BPM_ON_SILENCE = True  # Keep last BPM during silence/breakdowns
+TIGHTNESS = 100  # Beat tracker tightness (100=strict, 50=adaptive)
+BUFFER_DURATION = 10.0  # Seconds of audio to analyze
+
 
 class BeatDetector(QObject):
     """
@@ -544,10 +553,14 @@ class BeatDetector(QObject):
                 # audio_data is interleaved stereo: [L, R, L, R, ...]
                 mono_audio = (audio_data[0::2] + audio_data[1::2]) / 2.0
 
-            # Skip if buffer is mostly silence
-            if np.max(np.abs(mono_audio)) < 0.01:
-                logging.debug("Buffer is silent, skipping BPM calculation")
-                return
+            # Skip or hold BPM during silence/breakdowns
+            if np.max(np.abs(mono_audio)) < SILENCE_THRESHOLD:
+                if HOLD_BPM_ON_SILENCE and self.bpm > 0:
+                    logging.debug("Low audio level, holding previous BPM")
+                    return
+                else:
+                    logging.debug("Buffer too quiet, skipping BPM calc")
+                    return
 
             # Calculate onset strength envelope
             onset_env = librosa.onset.onset_strength(
@@ -568,7 +581,7 @@ class BeatDetector(QObject):
                 sr=self.sample_rate,
                 hop_length=HOP_LENGTH,
                 start_bpm=current_start_bpm,
-                tightness=100,
+                tightness=TIGHTNESS,
             )
 
             if len(beats) < 2:
@@ -582,8 +595,10 @@ class BeatDetector(QObject):
             beat_times = refined_beats * HOP_LENGTH / self.sample_rate
             ibis = np.diff(beat_times)
 
-            # Filter out unreasonable intervals (outside 40-220 BPM range)
-            valid_ibis = ibis[(ibis > 0.27) & (ibis < 1.5)]
+            # Filter out unreasonable intervals (outside MIN_BPM-MAX_BPM range)
+            max_ibi = 60.0 / MIN_BPM
+            min_ibi = 60.0 / MAX_BPM
+            valid_ibis = ibis[(ibis > min_ibi) & (ibis < max_ibi)]
 
             if len(valid_ibis) == 0:
                 logging.debug("No valid beat intervals found")
