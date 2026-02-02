@@ -21,15 +21,25 @@ class GpioBindingConfig:
     edge: str = "falling"  # "rising", "falling", "both"
     debounce_ms: int = 50
     hold_threshold_ms: int = 500  # Time to distinguish tap from hold
+    is_modifier: bool = (
+        False  # If True, this button acts as a modifier for rotary encoders
+    )
+    modifier_name: str | None = (
+        None  # Name to reference this modifier in rotary encoder configs
+    )
 
 
 @dataclass
 class RotaryEncoderConfig:
     """Configuration for a quadrature-encoded rotary encoder."""
+
     clk_pin: int  # CLK pin (rotary encoder A signal)
-    dt_pin: int   # DT pin (rotary encoder B signal)
+    dt_pin: int  # DT pin (rotary encoder B signal)
     action_cw: str  # Action name for clockwise rotation
     action_ccw: str  # Action name for counter-clockwise rotation
+    modifiers: dict[str, dict[str, str]] = field(
+        default_factory=dict
+    )  # modifier_name -> {action_cw, action_ccw}
 
 
 @dataclass
@@ -37,11 +47,11 @@ class ShortcutsConfig:
     # Maps action names to list of key sequences. Each action can have multiple keys.
     # Each key can appear in multiple actions (one key → multiple actions).
     keyboard: dict[str, list[str]] = field(default_factory=dict)
-    
+
     # Maps action names to GPIO config. Each pin can only bind to one action,
     # but actions can have both "tap" and "hold" variants (e.g., "next_preset" and "next_preset_hold").
     gpio: dict[str, GpioBindingConfig] = field(default_factory=dict)
-    
+
     # Maps encoder names to rotary encoder config. Each encoder triggers two actions (CW/CCW).
     rotary_encoders: dict[str, RotaryEncoderConfig] = field(default_factory=dict)
 
@@ -88,13 +98,15 @@ class ConfigManager:
 
     def load(self) -> AppConfig:
         if not self.config_path.exists():
-            logging.info(f"Config file not found at {self.config_path}, using defaults.")
+            logging.info(
+                f"Config file not found at {self.config_path}, using defaults."
+            )
             return AppConfig.default()
 
         try:
             with open(self.config_path, "r") as f:
                 data = json.load(f)
-                
+
                 audio_data = data.get("audio", {})
                 audio_config = AudioConfig(
                     input_device_id=audio_data.get("input_device_id"),
@@ -102,12 +114,12 @@ class ConfigManager:
                     auto_bpm_mode=audio_data.get("auto_bpm_mode", "manual"),
                     selected_channels=audio_data.get("selected_channels", [0, 1]),
                 )
-                
+
                 shortcuts_data = data.get("shortcuts", {})
                 keyboard_data = shortcuts_data.get("keyboard", {})
                 gpio_data = shortcuts_data.get("gpio", {})
                 rotary_encoders_data = shortcuts_data.get("rotary_encoders", {})
-                
+
                 # Parse GPIO bindings
                 gpio_bindings = {}
                 for action, gpio_cfg in gpio_data.items():
@@ -117,8 +129,10 @@ class ConfigManager:
                         edge=gpio_cfg.get("edge", "falling"),
                         debounce_ms=gpio_cfg.get("debounce_ms", 50),
                         hold_threshold_ms=gpio_cfg.get("hold_threshold_ms", 500),
+                        is_modifier=gpio_cfg.get("is_modifier", False),
+                        modifier_name=gpio_cfg.get("modifier_name"),
                     )
-                
+
                 # Parse rotary encoder bindings
                 rotary_encoder_bindings = {}
                 for encoder_name, encoder_cfg in rotary_encoders_data.items():
@@ -127,21 +141,33 @@ class ConfigManager:
                         dt_pin=encoder_cfg["dt_pin"],
                         action_cw=encoder_cfg["action_cw"],
                         action_ccw=encoder_cfg["action_ccw"],
+                        modifiers=encoder_cfg.get("modifiers", {}),
                     )
-                
+
                 shortcuts_config = ShortcutsConfig(
-                    keyboard=keyboard_data if keyboard_data else ShortcutsConfig.default().keyboard,
+                    keyboard=keyboard_data
+                    if keyboard_data
+                    else ShortcutsConfig.default().keyboard,
                     gpio=gpio_bindings,
                     rotary_encoders=rotary_encoder_bindings,
                 )
-                
+
                 lock_delay = data.get("lock_delay", False)
                 lock_feedback = data.get("lock_feedback", False)
                 lock_pitch = data.get("lock_pitch", False)
-                knob_order_list = data.get("knob_order", ["DLY-A", "DLY-B", "FBK-A", "FBK-B"])
+                knob_order_list = data.get(
+                    "knob_order", ["DLY-A", "DLY-B", "FBK-A", "FBK-B"]
+                )
                 knob_order = tuple(knob_order_list)
-                
-                return AppConfig(audio=audio_config, shortcuts=shortcuts_config, lock_delay=lock_delay, lock_feedback=lock_feedback, lock_pitch=lock_pitch, knob_order=knob_order)
+
+                return AppConfig(
+                    audio=audio_config,
+                    shortcuts=shortcuts_config,
+                    lock_delay=lock_delay,
+                    lock_feedback=lock_feedback,
+                    lock_pitch=lock_pitch,
+                    knob_order=knob_order,
+                )
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
             return AppConfig.default()

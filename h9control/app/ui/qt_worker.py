@@ -13,11 +13,18 @@ from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
 from h9control.domain.algorithms import H9FullAlgorithmData
-from h9control.domain.knob_display import format_knob_value, step_timefactor_delay_note_raw
+from h9control.domain.knob_display import (
+    format_knob_value,
+    step_timefactor_delay_note_raw,
+)
 from h9control.domain.preset import PresetSnapshot, parse_preset_dump_text
 from h9control.protocol.codes import H9SysexCodes
 from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
-from h9control.protocol.sysex import SysexFrame, build_eventide_sysex, decode_eventide_sysex
+from h9control.protocol.sysex import (
+    SysexFrame,
+    build_eventide_sysex,
+    decode_eventide_sysex,
+)
 from h9control.transport.midi_transport import MidiTransport
 from h9control.transport.gpio_input import GpioInputManager
 from midi import H9Midi
@@ -74,7 +81,7 @@ class _PresetChangeDetector:
 class H9DeviceWorker(QtCore.QObject):
     state_changed = QtCore.Signal(object)
     preset_change_detected = QtCore.Signal()
-    
+
     # Internal signals for GPIO callbacks (thread-safe)
     _gpio_adjust_knob_slot_signal = QtCore.Signal(int, int)
     _gpio_next_preset_signal = QtCore.Signal()
@@ -141,7 +148,7 @@ class H9DeviceWorker(QtCore.QObject):
         )
 
         self._setup_gpio_bindings()
-        
+
         # Connect internal GPIO signals to slots
         self._gpio_adjust_knob_slot_signal.connect(self.adjust_knob_slot)
         self._gpio_next_preset_signal.connect(self.next_preset)
@@ -152,7 +159,7 @@ class H9DeviceWorker(QtCore.QObject):
 
     def _setup_gpio_bindings(self) -> None:
         """Load GPIO bindings from config and wire them to Qt signals.
-        
+
         GPIO actions can have both tap and hold variants:
         - "action_name" -> fires on short press (tap)
         - "action_name_hold" -> fires on long press (hold)
@@ -175,38 +182,48 @@ class H9DeviceWorker(QtCore.QObject):
             "adjust_bpm_up": lambda: self._gpio_adjust_bpm_signal.emit(1),
             "adjust_bpm_down": lambda: self._gpio_adjust_bpm_signal.emit(-1),
             "adjust_knob_1_up": lambda: self._gpio_adjust_knob_slot_signal.emit(0, 1),
-            "adjust_knob_1_down": lambda: self._gpio_adjust_knob_slot_signal.emit(0, -1),
+            "adjust_knob_1_down": lambda: self._gpio_adjust_knob_slot_signal.emit(
+                0, -1
+            ),
             "adjust_knob_2_up": lambda: self._gpio_adjust_knob_slot_signal.emit(1, 1),
-            "adjust_knob_2_down": lambda: self._gpio_adjust_knob_slot_signal.emit(1, -1),
+            "adjust_knob_2_down": lambda: self._gpio_adjust_knob_slot_signal.emit(
+                1, -1
+            ),
             "adjust_knob_3_up": lambda: self._gpio_adjust_knob_slot_signal.emit(2, 1),
-            "adjust_knob_3_down": lambda: self._gpio_adjust_knob_slot_signal.emit(2, -1),
+            "adjust_knob_3_down": lambda: self._gpio_adjust_knob_slot_signal.emit(
+                2, -1
+            ),
             "adjust_knob_4_up": lambda: self._gpio_adjust_knob_slot_signal.emit(3, 1),
-            "adjust_knob_4_down": lambda: self._gpio_adjust_knob_slot_signal.emit(3, -1),
+            "adjust_knob_4_down": lambda: self._gpio_adjust_knob_slot_signal.emit(
+                3, -1
+            ),
         }
 
         # Group actions by pin (tap vs hold variants)
         pin_actions: dict[int, dict] = {}
         for action_name, gpio_cfg in gpio_config.items():
             pin = gpio_cfg.pin
-            
+
             # Check if this is a "hold" variant
             is_hold = action_name.endswith("_hold")
             base_action = action_name[:-5] if is_hold else action_name
-            
+
             handler = action_map.get(base_action)
             if handler is None:
                 self._logger.warning(f"Unknown GPIO action: {action_name}")
                 continue
-            
-            self._logger.debug(f"Mapped GPIO action '{action_name}' -> '{base_action}' (handler: {handler})")
-            
+
+            self._logger.debug(
+                f"Mapped GPIO action '{action_name}' -> '{base_action}' (handler: {handler})"
+            )
+
             if pin not in pin_actions:
                 pin_actions[pin] = {
                     "tap": None,
                     "hold": None,
                     "config": gpio_cfg,
                 }
-            
+
             if is_hold:
                 pin_actions[pin]["hold"] = handler
             else:
@@ -217,7 +234,8 @@ class H9DeviceWorker(QtCore.QObject):
             cfg = actions["config"]
             self._logger.info(
                 f"Binding GPIO pin {pin}: tap={actions['tap'] is not None}, "
-                f"hold={actions['hold'] is not None}"
+                f"hold={actions['hold'] is not None}, "
+                f"modifier_name={cfg.modifier_name}"
             )
             self._gpio.bind_action(
                 pin=pin,
@@ -226,6 +244,7 @@ class H9DeviceWorker(QtCore.QObject):
                 pull_up=(cfg.pull == "up"),
                 debounce_ms=cfg.debounce_ms,
                 hold_threshold_ms=cfg.hold_threshold_ms,
+                modifier_name=cfg.modifier_name,
             )
 
         # Bind rotary encoders
@@ -235,7 +254,7 @@ class H9DeviceWorker(QtCore.QObject):
                 # Resolve action names to handlers
                 cw_handler = action_map.get(encoder_cfg.action_cw)
                 ccw_handler = action_map.get(encoder_cfg.action_ccw)
-                
+
                 if cw_handler is None:
                     self._logger.warning(
                         f"Unknown rotary encoder CW action for '{encoder_name}': "
@@ -246,14 +265,47 @@ class H9DeviceWorker(QtCore.QObject):
                         f"Unknown rotary encoder CCW action for '{encoder_name}': "
                         f"{encoder_cfg.action_ccw}"
                     )
-                
-                if cw_handler is None and ccw_handler is None:
+
+                # Resolve modifier actions
+                modifier_actions = {}
+                for mod_name, mod_actions_cfg in encoder_cfg.modifiers.items():
+                    mod_cw_action = mod_actions_cfg.get("action_cw")
+                    mod_ccw_action = mod_actions_cfg.get("action_ccw")
+
+                    mod_cw_handler = None
+                    mod_ccw_handler = None
+
+                    if mod_cw_action:
+                        mod_cw_handler = action_map.get(mod_cw_action)
+                        if mod_cw_handler is None:
+                            self._logger.warning(
+                                f"Unknown rotary encoder modifier CW action for '{encoder_name}' "
+                                f"modifier '{mod_name}': {mod_cw_action}"
+                            )
+
+                    if mod_ccw_action:
+                        mod_ccw_handler = action_map.get(mod_ccw_action)
+                        if mod_ccw_handler is None:
+                            self._logger.warning(
+                                f"Unknown rotary encoder modifier CCW action for '{encoder_name}' "
+                                f"modifier '{mod_name}': {mod_ccw_action}"
+                            )
+
+                    if mod_cw_handler is not None or mod_ccw_handler is not None:
+                        modifier_actions[mod_name] = (mod_cw_handler, mod_ccw_handler)
+                        self._logger.debug(
+                            f"Resolved modifier '{mod_name}' for encoder '{encoder_name}': "
+                            f"CW={mod_cw_action}, CCW={mod_ccw_action}"
+                        )
+
+                if cw_handler is None and ccw_handler is None and not modifier_actions:
                     continue
-                
+
                 self._logger.info(
                     f"Binding rotary encoder '{encoder_name}': "
                     f"CLK={encoder_cfg.clk_pin}, DT={encoder_cfg.dt_pin}, "
-                    f"CW={encoder_cfg.action_cw}, CCW={encoder_cfg.action_ccw}"
+                    f"CW={encoder_cfg.action_cw}, CCW={encoder_cfg.action_ccw}, "
+                    f"modifiers={list(modifier_actions.keys())}"
                 )
                 self._gpio.bind_rotary_encoder(
                     encoder_name=encoder_name,
@@ -261,19 +313,24 @@ class H9DeviceWorker(QtCore.QObject):
                     dt_pin=encoder_cfg.dt_pin,
                     action_cw=cw_handler,
                     action_ccw=ccw_handler,
+                    modifier_actions=modifier_actions if modifier_actions else None,
                 )
 
     def _invoke_on_main_thread(self, method: Callable, *args) -> None:
         """Invoke a Qt slot on the main thread from GPIO callback."""
         self._logger.debug(f"_invoke_on_main_thread called for {method.__name__}")
-        
+
         def wrapper():
             try:
-                self._logger.debug(f"_invoke_on_main_thread executing: {method.__name__} with args {args}")
+                self._logger.debug(
+                    f"_invoke_on_main_thread executing: {method.__name__} with args {args}"
+                )
                 method(*args)
             except Exception:
-                self._logger.exception(f"Failed to invoke {method.__name__} on main thread")
-        
+                self._logger.exception(
+                    f"Failed to invoke {method.__name__} on main thread"
+                )
+
         try:
             QtCore.QTimer.singleShot(0, wrapper)
             self._logger.debug(f"QTimer.singleShot scheduled for {method.__name__}")
@@ -304,13 +361,13 @@ class H9DeviceWorker(QtCore.QObject):
 
         Updates the UI model in discrete steps and pushes the change to the pedal
         via MIDI CC.
-        
+
         Supports any knob name from the current preset. Lock behavior applies to
         DLY-A/B and FBK-A/B pairs when enabled.
         """
 
         name = knob_name.strip().upper()
-        
+
         # Validate that the knob exists in the current state
         knob_exists = any(k.name.upper() == name for k in self._last_state.knobs)
         if not knob_exists:
@@ -330,7 +387,7 @@ class H9DeviceWorker(QtCore.QObject):
 
         for knob in knobs_to_adjust:
             self._adjust_single_knob(knob, delta)
-        
+
         self._emit_state(self._state_with_overrides())
 
     @QtCore.Slot(int, int)
@@ -341,13 +398,13 @@ class H9DeviceWorker(QtCore.QObject):
             f"num_knobs={len(self._last_state.knobs)}, "
             f"connected={self._last_state.connected}"
         )
-        
+
         if slot_index < 0 or slot_index >= len(self._last_state.knobs):
             self._logger.warning(
                 f"Knob slot {slot_index} out of range (have {len(self._last_state.knobs)} knobs)"
             )
             return
-        
+
         knob_name = self._last_state.knobs[slot_index].name
         self._logger.debug(f"Adjusting knob '{knob_name}' by {delta}")
         self.adjust_knob(knob_name, delta)
@@ -355,7 +412,7 @@ class H9DeviceWorker(QtCore.QObject):
     def _adjust_single_knob(self, name: str, delta: int) -> None:
         """Adjust a single knob and send MIDI CC."""
         algo_key = (self._last_state.algorithm_key or "").upper()
-        
+
         self._logger.debug(
             f"_adjust_single_knob: name={name}, delta={delta}, algo_key={algo_key or 'NONE'}"
         )
@@ -373,12 +430,23 @@ class H9DeviceWorker(QtCore.QObject):
             self._logger.warning(f"Could not find current value for knob '{name}'")
             return
 
-        if name in {"DLY-A", "DLY-B"} and algo_key in {"DIGDLY", "VNTAGE", "TAPE", "MODDLY"}:
+        if name in {"DLY-A", "DLY-B"} and algo_key in {
+            "DIGDLY",
+            "VNTAGE",
+            "TAPE",
+            "MODDLY",
+        }:
             new_raw = step_timefactor_delay_note_raw(current_raw, delta=delta)
         else:
             # Coarse stepping for other knobs.
             step = int(round(MAX_KNOB_VALUE_14BIT * 0.05))  # 5%
-            new_raw = max(0, min(MAX_KNOB_VALUE_14BIT, current_raw + (step * (1 if delta > 0 else -1))))
+            new_raw = max(
+                0,
+                min(
+                    MAX_KNOB_VALUE_14BIT,
+                    current_raw + (step * (1 if delta > 0 else -1)),
+                ),
+            )
 
         # Try to push to device via MIDI CC.
         # H9 maps knobs to CC: Knob 1 = CC 22, Knob 2 = CC 23, ..., Knob 10 = CC 31
@@ -388,11 +456,13 @@ class H9DeviceWorker(QtCore.QObject):
             self._logger.debug(f"Sending CC for knob '{name}' (algo: {algo_key})")
             knob_names = H9FullAlgorithmData.knob_names(algo_key)
             knob_names.reverse()
-            
+
             knob_names_upper = [k.upper() for k in knob_names]
             if name in knob_names_upper:
                 knob_index_1based = knob_names_upper.index(name) + 1
-                cc_number = 21 + knob_index_1based  # CC 22 for knob 1, CC 31 for knob 10
+                cc_number = (
+                    21 + knob_index_1based
+                )  # CC 22 for knob 1, CC 31 for knob 10
                 # Convert 14-bit raw value to 7-bit MIDI CC value (0-127)
                 cc_value = int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 127.0))
                 cc_value = max(0, min(127, cc_value))
@@ -413,7 +483,9 @@ class H9DeviceWorker(QtCore.QObject):
         elif self._transport is None:
             self._logger.warning(f"Cannot send CC for '{name}': not connected")
         elif not algo_key:
-            self._logger.warning(f"Cannot send CC for '{name}': no algorithm_key loaded")
+            self._logger.warning(
+                f"Cannot send CC for '{name}': no algorithm_key loaded"
+            )
 
         self._knob_overrides[name] = new_raw
 
@@ -465,31 +537,33 @@ class H9DeviceWorker(QtCore.QObject):
 
     def _check_auto_bpm_sync(self) -> int | None:
         """Check if auto BPM sync should fire and send BPM if needed.
-        
+
         Returns the newly sent BPM value if successful, None otherwise.
         """
         if self._config.auto_bpm_mode != "continuous":
             self._logger.debug(f"Auto BPM sync not in continuous mode, skipping")
             return None
-        
+
         if self._live_bpm is None:
-            self._logger.debug(f"No live BPM available, skipping auto-sync") 
+            self._logger.debug(f"No live BPM available, skipping auto-sync")
             return None
-        
+
         if self._transport is None:
             self._logger.debug(f"Not connected, skipping auto-sync")
             return None
-        
+
         rounded_bpm = int(round(self._live_bpm))
-        
+
         # Only send if the rounded value has changed
         if rounded_bpm == self._last_sent_auto_bpm:
-            self._logger.debug(f"Auto BPM sync: rounded BPM {rounded_bpm} unchanged, skipping")
+            self._logger.debug(
+                f"Auto BPM sync: rounded BPM {rounded_bpm} unchanged, skipping"
+            )
             return None
-        
+
         # Clamp to valid range
         target = max(20, min(300, rounded_bpm))
-        
+
         try:
             self._backend.set_bpm(target)
             self._last_sent_auto_bpm = target
@@ -518,7 +592,7 @@ class H9DeviceWorker(QtCore.QObject):
     @QtCore.Slot()
     def shutdown(self) -> None:
         self._gpio.unbind_all()
-        
+
         self._rx_stop.set()
         if self._rx_thread is not None and self._rx_thread.is_alive():
             self._rx_thread.join(timeout=1.0)
@@ -610,7 +684,9 @@ class H9DeviceWorker(QtCore.QObject):
                     if name not in preset.knobs_by_name:
                         continue
                     override = self._knob_overrides.get(name)
-                    raw = int(preset.knobs_by_name[name] if override is None else override)
+                    raw = int(
+                        preset.knobs_by_name[name] if override is None else override
+                    )
                     pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
                     pretty = format_knob_value(
                         algorithm_key=preset.algorithm_key,
@@ -668,7 +744,9 @@ class H9DeviceWorker(QtCore.QObject):
 
         try:
             next_program = (self._current_program + delta) % 128
-            self._transport.send_program_change(program=next_program, channel=self._midi_channel)
+            self._transport.send_program_change(
+                program=next_program, channel=self._midi_channel
+            )
             self._current_program = next_program
             time.sleep(0.3)
             self._refresh_state()
@@ -761,7 +839,9 @@ class H9DeviceWorker(QtCore.QObject):
             return
 
         self._rx_stop.clear()
-        self._rx_thread = threading.Thread(target=self._rx_loop, name="h9-rx", daemon=True)
+        self._rx_thread = threading.Thread(
+            target=self._rx_loop, name="h9-rx", daemon=True
+        )
         self._rx_thread.start()
 
     def _rx_loop(self) -> None:
@@ -802,7 +882,9 @@ class H9DeviceWorker(QtCore.QObject):
                     return True
         return False
 
-    def _wait_for_frame(self, predicate: Callable[[SysexFrame], bool], *, timeout_s: float) -> SysexFrame:
+    def _wait_for_frame(
+        self, predicate: Callable[[SysexFrame], bool], *, timeout_s: float
+    ) -> SysexFrame:
         waiter = _FrameWaiter(predicate)
         with self._waiters_lock:
             self._waiters.append(waiter)
