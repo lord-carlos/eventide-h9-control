@@ -33,6 +33,27 @@ RADIO_BUTTON_STYLESHEET = """
 """
 
 
+def configure_combobox_for_touch(combo: QtWidgets.QComboBox) -> None:
+    """Configure a combo box for touch-friendly dropdown interaction."""
+    # Larger arrow button
+    combo.setStyleSheet("""
+        QComboBox::drop-down {
+            width: 40px;
+        }
+    """)
+
+    # Set larger font for dropdown items - this works across all platforms
+    view_font = QtGui.QFont("Arial", 24)
+    combo.setFont(view_font)
+
+    # Configure the popup view for larger items
+    view = combo.view()
+    if view:
+        view.setFont(view_font)
+        # Set minimum row height for touch targets
+        view.setMinimumHeight(300)  # Make popup taller overall
+
+
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
     settings_changed = QtCore.Signal()  # Emitted when settings change that affect UI
@@ -53,8 +74,8 @@ class SettingsWidget(QtWidgets.QWidget):
 
     def _init_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
 
         # Title
         title = QtWidgets.QLabel("Settings")
@@ -65,8 +86,36 @@ class SettingsWidget(QtWidgets.QWidget):
         title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        # Form Layout
-        form_layout = QtWidgets.QFormLayout()
+        # Scroll area for form content
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll_area.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 24px;
+                background: transparent;
+            }
+            QScrollBar::handle:vertical {
+                background: #888888;
+                border-radius: 12px;
+                min-height: 40px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        # Form widget and layout inside scroll area
+        form_widget = QtWidgets.QWidget()
+        form_layout = QtWidgets.QFormLayout(form_widget)
         form_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
         form_layout.setFormAlignment(
             QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop
@@ -79,7 +128,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._device_combo = QtWidgets.QComboBox()
         self._device_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
         self._device_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
-        self._device_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        configure_combobox_for_touch(self._device_combo)
         self._populate_devices()
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
 
@@ -91,7 +140,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._channel_left_combo = QtWidgets.QComboBox()
         self._channel_left_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
         self._channel_left_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
-        self._channel_left_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        configure_combobox_for_touch(self._channel_left_combo)
         self._channel_left_combo.currentIndexChanged.connect(self._on_channel_changed)
 
         lbl_channel_left = QtWidgets.QLabel("Left Channel:")
@@ -102,7 +151,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._channel_right_combo = QtWidgets.QComboBox()
         self._channel_right_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
         self._channel_right_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
-        self._channel_right_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        configure_combobox_for_touch(self._channel_right_combo)
         self._channel_right_combo.currentIndexChanged.connect(self._on_channel_changed)
 
         lbl_channel_right = QtWidgets.QLabel("Right Channel:")
@@ -174,7 +223,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._theme_combo = QtWidgets.QComboBox()
         self._theme_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
         self._theme_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
-        self._theme_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        configure_combobox_for_touch(self._theme_combo)
         self._theme_combo.addItem("System", userData="system")
         self._theme_combo.addItem("Light", userData="light")
         self._theme_combo.addItem("Dark", userData="dark")
@@ -189,16 +238,38 @@ class SettingsWidget(QtWidgets.QWidget):
         # Display Brightness Slider
         self._brightness_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self._brightness_slider.setRange(10, 100)
-        self._brightness_slider.setMinimumWidth(COMBOBOX_MIN_WIDTH)
-        self._brightness_slider.setMinimumHeight(40)
+        self._brightness_slider.setMinimumWidth(500)
+        self._brightness_slider.setMinimumHeight(60)
+        self._brightness_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #999999;
+                height: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #333333, stop:1 #888888);
+                border-radius: 10px;
+            }
+            QSlider::handle:horizontal {
+                background: #ffffff;
+                border: 2px solid #666666;
+                width: 40px;
+                height: 50px;
+                margin: -15px 0;
+                border-radius: 8px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #0078d4;
+                border-radius: 10px;
+            }
+        """)
         self._brightness_slider.valueChanged.connect(self._on_brightness_changed)
 
         lbl_brightness = QtWidgets.QLabel("Brightness:")
         lbl_brightness.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_brightness, self._brightness_slider)
 
-        layout.addLayout(form_layout)
-        layout.addStretch()
+        # Add the form widget to scroll area
+        scroll_area.setWidget(form_widget)
+        layout.addWidget(scroll_area, stretch=1)
 
         # Back Button
         self._btn_back = QtWidgets.QPushButton("Back")
