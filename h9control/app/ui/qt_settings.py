@@ -231,6 +231,17 @@ class SettingsWidget(QtWidgets.QWidget):
             index = self._device_combo.findData(current_device_id)
             if index >= 0:
                 self._device_combo.setCurrentIndex(index)
+            else:
+                # Saved device not found - update config to fallback device
+                fallback_device_id = self._device_combo.itemData(0)
+                if fallback_device_id is not None:
+                    logging.warning(
+                        f"Saved device {current_device_id} not found, "
+                        f"falling back to device {fallback_device_id}"
+                    )
+                    self.config.audio_input_device_id = fallback_device_id
+                    # Reset channels to defaults since device changed
+                    self.config.audio_selected_channels = [0, 1]
 
         # Always populate channels based on currently selected device
         # (handles first run, missing saved device, or device at index 0)
