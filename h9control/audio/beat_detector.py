@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from collections import deque
 
 import librosa
 import numpy as np
-import pyaudio
+import sounddevice as sd
 from PySide6.QtCore import QObject, Signal
 
 from h9control.app.config import ConfigManager
@@ -21,7 +22,7 @@ from h9control.app.config import ConfigManager
 
 # Audio capture settings
 SAMPLE_RATE = 48000  # Lower = less CPU (22050 for Pi, 44100 for high accuracy)
-BUFFER_SIZE = 1024  # PyAudio buffer size per read (samples)
+BUFFER_SIZE = 1024  # Buffer size per callback (samples)
 
 # Rolling buffer settings
 BUFFER_DURATION = 8.0  # Seconds of audio to keep in rolling buffer
@@ -32,7 +33,9 @@ HOP_LENGTH = 256  # Hop length for onset detection (larger = faster, less accura
 START_BPM = 120.0  # Starting tempo estimate for beat tracking
 
 # Smoothing
-ENABLE_SMOOTHING = True  # Enable smoothing of BPM over time (exponential moving average)
+ENABLE_SMOOTHING = (
+    True  # Enable smoothing of BPM over time (exponential moving average)
+)
 SMOOTHING_ALPHA = 0.6  # Weight for new detection (0.0-1.0). Higher = more responsive.
 
 # Onset strength parameters
@@ -46,8 +49,8 @@ class BeatDetector(QObject):
     """
     Beat detector using librosa with a rolling audio buffer.
 
-    Captures audio continuously, maintains a rolling buffer of BUFFER_DURATION seconds,
-    and recalculates BPM every UPDATE_INTERVAL seconds.
+    Captures audio continuously using sounddevice callback, maintains a rolling buffer
+    of BUFFER_DURATION seconds, and recalculates BPM every UPDATE_INTERVAL seconds.
     """
 
     bpm_detected = Signal(float)
@@ -78,9 +81,49 @@ class BeatDetector(QObject):
         # Current BPM value
         self.bpm: float = 0.0
 
-        # PyAudio setup
-        self.p = pyaudio.PyAudio()
-        self.stream: pyaudio.Stream | None = None
+        # sounddevice setup
+        self.stream: sd.InputStream | None = None
+        self._stream_lock = threading.Lock()
+
+        # Queue for callback data passing (thread-safe)
+        self.audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
+
+        # Stream monitoring and recovery
+        self._needs_recovery = False
+        self.recovery_attempts = 0
+        self.last_recovery_time: float = 0.0
+        self.total_recoveries = 0
+
+    def _audio_callback(
+        self, indata: np.ndarray, frames: int, time_info, status: sd.CallbackFlags
+    ) -> None:
+        """
+        Audio callback - called by sounddevice for each audio block.
+
+        Runs at high priority, must be fast and non-blocking.
+        """
+        # Track XRUN conditions
+        if status.input_overflow:
+            logging.error(
+                f"Audio input overflow detected! Total: {status.input_overflow}"
+            )
+        if status.input_underflow:
+            logging.warning(
+                f"Audio input underflow detected! Total: {status.input_underflow}"
+            )
+
+        # Flatten stereo input (shape: [frames, channels] -> [samples])
+        samples = indata.flatten()
+
+        # Extract selected channels and keep as stereo
+        total_channels = indata.shape[1]
+        stereo_samples = self._extract_stereo_channels(samples, total_channels)
+
+        # Put in queue (non-blocking, drops if full to avoid callback blocking)
+        try:
+            self.audio_queue.put_nowait(stereo_samples)
+        except queue.Full:
+            logging.warning("Audio queue full, dropping audio block")
 
     def start(self) -> None:
         """Start the beat detection threads."""
@@ -118,15 +161,17 @@ class BeatDetector(QObject):
         logging.info("BeatDetector stopped.")
 
     def _capture_loop(self) -> None:
-        """Thread 1: Audio Capture Loop - dedicated for real-time I/O."""
+        """Thread 1: Audio Capture Loop - processes callback data."""
         input_device_index = self.config.audio_input_device_id
-        
+
         # Read selected channels from config
         self.selected_channels = self.config.audio_selected_channels
         if len(self.selected_channels) < 2:
-            logging.warning(f"Invalid selected_channels {self.selected_channels}, using [0, 1]")
+            logging.warning(
+                f"Invalid selected_channels {self.selected_channels}, using [0, 1]"
+            )
             self.selected_channels = [0, 1]
-        
+
         # We need to open stream with enough channels to cover the highest selected index
         max_selected_channel = max(self.selected_channels)
         channels = max_selected_channel + 1
@@ -134,18 +179,18 @@ class BeatDetector(QObject):
         # Resolve device if needed or use default
         if input_device_index is None:
             try:
-                default_info = self.p.get_default_input_device_info()
+                default_info = sd.query_devices(kind="input")
                 input_device_index = int(default_info["index"])
-            except OSError:
-                logging.error("No default input device found.")
+            except Exception as e:
+                logging.error(f"No default input device found: {e}")
                 self.running = False
                 return
 
         # Get device info and adjust sample rate to native rate
         try:
-            dev_info = self.p.get_device_info_by_index(input_device_index)
-            native_rate = int(dev_info.get("defaultSampleRate", 44100))
-            max_input_channels = int(dev_info.get("maxInputChannels", 1))
+            dev_info = sd.query_devices(input_device_index)
+            native_rate = int(dev_info.get("default_samplerate", 44100))
+            max_input_channels = int(dev_info.get("max_input_channels", 1))
 
             # Validate selected channels against device capabilities
             if max_selected_channel >= max_input_channels:
@@ -156,7 +201,7 @@ class BeatDetector(QObject):
                 self.selected_channels = [0, 1]
                 max_selected_channel = 1
                 channels = 2
-            
+
             if channels > max_input_channels:
                 logging.warning(
                     f"Requested {channels} channels but device only has "
@@ -167,7 +212,9 @@ class BeatDetector(QObject):
             # Check if SAMPLE_RATE is explicitly set (non-zero, non-empty)
             if SAMPLE_RATE and SAMPLE_RATE > 0:
                 # Force configured sample rate
-                logging.warning(f"Forcing sample rate to {SAMPLE_RATE}Hz (device native: {native_rate}Hz)")
+                logging.warning(
+                    f"Forcing sample rate to {SAMPLE_RATE}Hz (device native: {native_rate}Hz)"
+                )
                 self.sample_rate = SAMPLE_RATE
             else:
                 # Use device native rate (avoid resampling artifacts)
@@ -176,17 +223,19 @@ class BeatDetector(QObject):
                         f"Using native device rate: {native_rate}Hz (was {self.sample_rate}Hz)"
                     )
                     self.sample_rate = native_rate
-            
+
             self._recalculate_buffer_sizes()
 
         except Exception as e:
-            logging.error(f"Error getting device info for device {input_device_index}: {e}")
+            logging.error(
+                f"Error getting device info for device {input_device_index}: {e}"
+            )
             input_device_index = self._find_fallback_device(channels)
             if input_device_index is None:
                 self.running = False
                 return
 
-        # Try to open audio stream
+        # Open stream with sounddevice
         if not self._open_stream(input_device_index, channels):
             self.running = False
             return
@@ -196,23 +245,31 @@ class BeatDetector(QObject):
             f"(buffer: {BUFFER_DURATION}s, update: {UPDATE_INTERVAL}s)"
         )
 
-        # Main capture loop
-        assert self.stream is not None
+        # Main loop: consume audio from queue
         while self.running and not self._stop_event.is_set():
             try:
-                audio_data = self.stream.read(self.buffer_size, exception_on_overflow=False)
-                samples = np.frombuffer(audio_data, dtype=np.float32)
-
-                # Extract selected channels and keep as stereo
-                stereo_samples = self._extract_stereo_channels(samples, channels)
+                # Get audio block from queue (with timeout to check stop event)
+                stereo_samples = self.audio_queue.get(timeout=0.1)
 
                 # Append to deque (thread-safe extension)
                 with self.buffer_lock:
                     self.audio_buffer.extend(stereo_samples)
 
+            except queue.Empty:
+                # No audio available yet (normal, callback hasn't fired)
+                # Check if we need recovery
+                if (
+                    getattr(self, "_needs_recovery", False)
+                    and self._should_attempt_recovery()
+                ):
+                    if self._attempt_recovery():
+                        logging.info("Stream recovered successfully")
+                    else:
+                        logging.error("Stream recovery failed")
+                continue
             except Exception as e:
                 if self.running:
-                    logging.error(f"Error reading audio: {e}")
+                    logging.error(f"Error processing audio: {e}")
                     time.sleep(0.1)
 
         self._cleanup_stream()
@@ -239,14 +296,78 @@ class BeatDetector(QObject):
         with self.buffer_lock:
             self.audio_buffer = deque(maxlen=self.buffer_samples)
 
+    def _should_attempt_recovery(self) -> bool:
+        """Check if we should attempt stream recovery."""
+        MAX_RECOVERY_ATTEMPTS = 3
+        RECOVERY_COOLDOWN_SECONDS = 30
+
+        if self.recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
+            logging.error(f"Max recovery attempts ({MAX_RECOVERY_ATTEMPTS}) reached")
+            return False
+
+        # Cooldown period
+        time_since_last = time.time() - self.last_recovery_time
+        if time_since_last < RECOVERY_COOLDOWN_SECONDS:
+            return False
+
+        return True
+
+    def _attempt_recovery(self) -> bool:
+        """Attempt to recover audio stream."""
+        RECOVERY_BACKOFF_DELAYS = [1.0, 2.0, 4.0]
+
+        self.recovery_attempts += 1
+        attempt_num = self.recovery_attempts
+
+        logging.error(f"Audio stream recovery attempt {attempt_num}/3")
+
+        # Calculate backoff delay
+        delay = RECOVERY_BACKOFF_DELAYS[
+            min(attempt_num - 1, len(RECOVERY_BACKOFF_DELAYS) - 1)
+        ]
+        logging.info(f"Waiting {delay}s before recovery attempt...")
+        time.sleep(delay)
+
+        # Close existing stream
+        self._cleanup_stream()
+
+        # Wait for USB device to settle
+        time.sleep(0.5)
+
+        # Get device index
+        input_device_index = self.config.audio_input_device_id
+        max_selected_channel = max(self.selected_channels)
+        channels = max_selected_channel + 1
+
+        if input_device_index is None:
+            try:
+                default_info = sd.query_devices(kind="input")
+                input_device_index = int(default_info["index"])
+            except Exception:
+                return False
+
+        # Try to reopen stream
+        if self._open_stream(input_device_index, channels):
+            logging.info(f"Recovery successful (attempt {attempt_num})")
+            self.recovery_attempts = 0
+            self.last_recovery_time = time.time()
+            self.total_recoveries += 1
+            self._needs_recovery = False
+            return True
+        else:
+            logging.error(f"Recovery failed on attempt {attempt_num}")
+            return False
+
     def _find_fallback_device(self, channels: int) -> int | None:
-        """Find a fallback input device if the configured one fails."""
+        """Find a fallback input device if configured one fails."""
         try:
-            count = self.p.get_device_count()
-            for i in range(count):
-                info = self.p.get_device_info_by_index(i)
-                if int(info.get("maxInputChannels", 0)) > 0:
-                    logging.warning(f"Falling back to device {i}: {info.get('name', 'Unknown')}")
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                max_input_channels = int(dev.get("max_input_channels", 0))
+                if max_input_channels > 0:
+                    logging.warning(
+                        f"Falling back to device {i}: {dev.get('name', 'Unknown')}"
+                    )
                     return i
         except Exception as e:
             logging.error(f"Failed to find fallback device: {e}")
@@ -254,20 +375,31 @@ class BeatDetector(QObject):
         return None
 
     def _open_stream(self, device_index: int, channels: int) -> bool:
-        """Open the PyAudio stream. Returns True on success."""
+        """Open the sounddevice InputStream. Returns True on success."""
         try:
-            dev_info = self.p.get_device_info_by_index(device_index)
-            max_channels = int(dev_info.get("maxInputChannels", 1))
+            dev_info = sd.query_devices(device_index)
+            max_channels = int(dev_info.get("max_input_channels", 1))
             actual_channels = min(channels, max_channels)
 
-            self.stream = self.p.open(
-                format=pyaudio.paFloat32,
-                channels=actual_channels,
-                rate=self.sample_rate,
-                input=True,
-                frames_per_buffer=self.buffer_size,
-                input_device_index=device_index,
-            )
+            logging.info(f"Opening sounddevice stream on '{dev_info['name']}'")
+            logging.info(f"  Sample rate: {self.sample_rate}Hz")
+            logging.info(f"  Channels: {actual_channels}")
+            logging.info(f"  Blocksize: {self.buffer_size}")
+            logging.info(f"  Latency: 'high' (for stability)")
+
+            with self._stream_lock:
+                self.stream = sd.InputStream(
+                    device=device_index,
+                    channels=actual_channels,
+                    samplerate=self.sample_rate,
+                    blocksize=self.buffer_size,
+                    dtype="float32",
+                    latency="high",
+                    callback=self._audio_callback,
+                )
+                self.stream.start()
+
+            logging.info("Stream opened and started successfully")
             return True
         except Exception as e:
             logging.error(f"Failed to open audio stream on device {device_index}: {e}")
@@ -275,44 +407,50 @@ class BeatDetector(QObject):
 
     def _cleanup_stream(self) -> None:
         """Clean up audio resources."""
-        if self.stream:
-            try:
-                self.stream.stop_stream()
-                self.stream.close()
-            except Exception:
-                pass
-            self.stream = None
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    if self.stream.active:
+                        self.stream.stop()
+                    self.stream.close()
+                except Exception as e:
+                    logging.debug(f"Error closing stream: {e}")
+                finally:
+                    self.stream = None
+                    logging.info("Stream closed")
 
     def _extract_stereo_channels(
         self, interleaved_samples: np.ndarray, total_channels: int
     ) -> np.ndarray:
         """
         Extract two selected channels from multi-channel interleaved audio and return as stereo.
-        
+
         Args:
             interleaved_samples: Flat array of interleaved multi-channel samples
             total_channels: Total number of channels in the interleaved data
-            
+
         Returns:
             Stereo interleaved array (left, right, left, right, ...)
         """
         if total_channels == 1:
             # Mono input - duplicate to stereo
             return np.repeat(interleaved_samples, 2)
-        
+
         # Reshape interleaved data: (samples*channels,) -> (samples, channels)
         num_frames = len(interleaved_samples) // total_channels
-        reshaped = interleaved_samples[: num_frames * total_channels].reshape(-1, total_channels)
+        reshaped = interleaved_samples[: num_frames * total_channels].reshape(
+            -1, total_channels
+        )
 
         # Extract selected channels
         left_channel = reshaped[:, self.selected_channels[0]]
         right_channel = reshaped[:, self.selected_channels[1]]
-        
+
         # Interleave to stereo: (L, R, L, R, ...)
         stereo = np.empty(num_frames * 2, dtype=np.float32)
         stereo[0::2] = left_channel
         stereo[1::2] = right_channel
-        
+
         return stereo
 
     def _calculate_bpm(self, audio_data: np.ndarray) -> None:
@@ -321,7 +459,7 @@ class BeatDetector(QObject):
             # Convert stereo to mono by averaging channels
             # audio_data is interleaved stereo: [L, R, L, R, ...]
             mono_audio = (audio_data[0::2] + audio_data[1::2]) / 2.0
-            
+
             # Skip if buffer is mostly silence
             if np.max(np.abs(mono_audio)) < 0.01:
                 logging.debug("Buffer is silent, skipping BPM calculation")
@@ -375,7 +513,9 @@ class BeatDetector(QObject):
 
             # Apply smoothing if enabled
             if ENABLE_SMOOTHING and self.bpm > 0:
-                new_bpm = (self.bpm * (1 - SMOOTHING_ALPHA)) + (raw_bpm * SMOOTHING_ALPHA)
+                new_bpm = (self.bpm * (1 - SMOOTHING_ALPHA)) + (
+                    raw_bpm * SMOOTHING_ALPHA
+                )
                 self.bpm = round(new_bpm, 1)
             else:
                 self.bpm = round(raw_bpm, 1)
@@ -415,7 +555,9 @@ class BeatDetector(QObject):
 
         # Select intervals within 5% of the median (rejects missed/double beats)
         tolerance = 0.05
-        cluster_ibis = valid_ibis[np.abs(valid_ibis - median_ibi) <= (tolerance * median_ibi)]
+        cluster_ibis = valid_ibis[
+            np.abs(valid_ibis - median_ibi) <= (tolerance * median_ibi)
+        ]
 
         # Take the MEAN of this cluster for sub-sample precision
         if len(cluster_ibis) > 0:
@@ -424,8 +566,7 @@ class BeatDetector(QObject):
         return 60.0 / float(median_ibi)
 
     def __del__(self) -> None:
-        """Cleanup PyAudio on deletion."""
-        try:
-            self.p.terminate()
-        except Exception:
-            pass
+        """Cleanup on deletion."""
+        # sounddevice cleans up automatically when stream is closed
+        # No need to call terminate() like PyAudio
+        pass

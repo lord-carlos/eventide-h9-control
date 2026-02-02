@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import pyaudio
+import sounddevice as sd
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from h9control.app.config import ConfigManager
@@ -35,12 +35,13 @@ RADIO_BUTTON_STYLESHEET = """
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
     settings_changed = QtCore.Signal()  # Emitted when settings change that affect UI
-    audio_settings_changed = QtCore.Signal()  # Emitted when audio device/channel settings change
+    audio_settings_changed = (
+        QtCore.Signal()
+    )  # Emitted when audio device/channel settings change
 
     def __init__(self, config: ConfigManager) -> None:
         super().__init__()
         self.config = config
-        self._pyaudio = pyaudio.PyAudio()
         self._channel_left_combo: QtWidgets.QComboBox | None = None
         self._channel_right_combo: QtWidgets.QComboBox | None = None
 
@@ -64,7 +65,9 @@ class SettingsWidget(QtWidgets.QWidget):
         # Form Layout
         form_layout = QtWidgets.QFormLayout()
         form_layout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
-        form_layout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop)
+        form_layout.setFormAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop
+        )
         form_layout.setSpacing(TOUCH_SPACING)
 
         # TODO: Add knob_order to settings UI (configurable list of which knobs to display and in what order)
@@ -76,7 +79,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._device_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._populate_devices()
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
-        
+
         lbl_device = QtWidgets.QLabel("Audio Input Device:")
         lbl_device.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_device, self._device_combo)
@@ -87,7 +90,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._channel_left_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
         self._channel_left_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._channel_left_combo.currentIndexChanged.connect(self._on_channel_changed)
-        
+
         lbl_channel_left = QtWidgets.QLabel("Left Channel:")
         lbl_channel_left.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_channel_left, self._channel_left_combo)
@@ -98,7 +101,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._channel_right_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
         self._channel_right_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._channel_right_combo.currentIndexChanged.connect(self._on_channel_changed)
-        
+
         lbl_channel_right = QtWidgets.QLabel("Right Channel:")
         lbl_channel_right.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_channel_right, self._channel_right_combo)
@@ -107,7 +110,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._bpm_mode_group = QtWidgets.QButtonGroup(self)
         self._bpm_mode_manual = QtWidgets.QRadioButton("Manual (Current)")
         self._bpm_mode_continuous = QtWidgets.QRadioButton("Continuous")
-        
+
         self._bpm_mode_manual.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._bpm_mode_continuous.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._bpm_mode_manual.setMinimumHeight(RADIO_BUTTON_MIN_HEIGHT)
@@ -117,7 +120,7 @@ class SettingsWidget(QtWidgets.QWidget):
 
         self._bpm_mode_group.addButton(self._bpm_mode_manual)
         self._bpm_mode_group.addButton(self._bpm_mode_continuous)
-        
+
         self._bpm_mode_group.buttonClicked.connect(self._on_bpm_mode_changed)
 
         bpm_layout = QtWidgets.QHBoxLayout()
@@ -135,7 +138,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._lock_delay_checkbox.setMinimumHeight(CHECKBOX_MIN_HEIGHT)
         self._lock_delay_checkbox.setStyleSheet(CHECKBOX_STYLESHEET)
         self._lock_delay_checkbox.stateChanged.connect(self._on_lock_delay_changed)
-        
+
         lbl_lock_delay = QtWidgets.QLabel("Delay Lock:")
         lbl_lock_delay.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_lock_delay, self._lock_delay_checkbox)
@@ -145,8 +148,10 @@ class SettingsWidget(QtWidgets.QWidget):
         self._lock_feedback_checkbox.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
         self._lock_feedback_checkbox.setMinimumHeight(CHECKBOX_MIN_HEIGHT)
         self._lock_feedback_checkbox.setStyleSheet(CHECKBOX_STYLESHEET)
-        self._lock_feedback_checkbox.stateChanged.connect(self._on_lock_feedback_changed)
-        
+        self._lock_feedback_checkbox.stateChanged.connect(
+            self._on_lock_feedback_changed
+        )
+
         lbl_lock_feedback = QtWidgets.QLabel("Feedback Lock:")
         lbl_lock_feedback.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_lock_feedback, self._lock_feedback_checkbox)
@@ -157,7 +162,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._lock_pitch_checkbox.setMinimumHeight(CHECKBOX_MIN_HEIGHT)
         self._lock_pitch_checkbox.setStyleSheet(CHECKBOX_STYLESHEET)
         self._lock_pitch_checkbox.stateChanged.connect(self._on_lock_pitch_changed)
-        
+
         lbl_lock_pitch = QtWidgets.QLabel("Pitch Lock:")
         lbl_lock_pitch.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_lock_pitch, self._lock_pitch_checkbox)
@@ -174,16 +179,16 @@ class SettingsWidget(QtWidgets.QWidget):
 
     def _populate_devices(self) -> None:
         self._device_combo.clear()
-        
+
         # Add "Default" option? Or just list devices.
         # Let's list devices.
-        
+
         try:
-            count = self._pyaudio.get_device_count()
-            for i in range(count):
-                info = self._pyaudio.get_device_info_by_index(i)
-                if info.get("maxInputChannels", 0) > 0:
-                    name = info.get("name", f"Device {i}")
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                max_channels = int(dev.get("max_input_channels", 0))
+                if max_channels > 0:
+                    name = dev.get("name", f"Device {i}")
                     self._device_combo.addItem(name, userData=i)
         except Exception as e:
             logging.error(f"Error listing audio devices: {e}")
@@ -192,26 +197,26 @@ class SettingsWidget(QtWidgets.QWidget):
         """Populate channel combo boxes based on selected device's capabilities."""
         if self._channel_left_combo is None or self._channel_right_combo is None:
             return
-        
+
         # Block signals to prevent triggering _on_channel_changed during population
         self._channel_left_combo.blockSignals(True)
         self._channel_right_combo.blockSignals(True)
-        
+
         try:
             self._channel_left_combo.clear()
             self._channel_right_combo.clear()
-            
+
             if device_id is None:
                 return
-                
+
             try:
-                info = self._pyaudio.get_device_info_by_index(device_id)
-                max_channels = int(info.get("maxInputChannels", 2))
-                
+                info = sd.query_devices(device_id)
+                max_channels = int(info.get("max_input_channels", 2))
+
                 for i in range(max_channels):
                     self._channel_left_combo.addItem(f"Channel {i}", userData=i)
                     self._channel_right_combo.addItem(f"Channel {i}", userData=i)
-                    
+
             except Exception as e:
                 logging.error(f"Error getting device info: {e}")
         finally:
@@ -226,33 +231,41 @@ class SettingsWidget(QtWidgets.QWidget):
             index = self._device_combo.findData(current_device_id)
             if index >= 0:
                 self._device_combo.setCurrentIndex(index)
-        
+
         # Always populate channels based on currently selected device
         # (handles first run, missing saved device, or device at index 0)
         selected_device_id = self._device_combo.currentData()
         if selected_device_id is not None:
             self._populate_channels(selected_device_id)
-        
+
         # Load selected channels after population ensures items exist
         selected_channels = self.config.audio_selected_channels
         if len(selected_channels) >= 2:
             # Set left channel
-            left_idx = self._channel_left_combo.findData(selected_channels[0]) if self._channel_left_combo else -1
+            left_idx = (
+                self._channel_left_combo.findData(selected_channels[0])
+                if self._channel_left_combo
+                else -1
+            )
             if left_idx >= 0:
                 self._channel_left_combo.setCurrentIndex(left_idx)
-            
+
             # Set right channel
-            right_idx = self._channel_right_combo.findData(selected_channels[1]) if self._channel_right_combo else -1
+            right_idx = (
+                self._channel_right_combo.findData(selected_channels[1])
+                if self._channel_right_combo
+                else -1
+            )
             if right_idx >= 0:
                 self._channel_right_combo.setCurrentIndex(right_idx)
-        
+
         # BPM Mode
         mode = self.config.auto_bpm_mode
         if mode == "continuous":
             self._bpm_mode_continuous.setChecked(True)
         else:
             self._bpm_mode_manual.setChecked(True)
-        
+
         # Lock settings
         self._lock_delay_checkbox.setChecked(self.config.lock_delay)
         self._lock_feedback_checkbox.setChecked(self.config.lock_feedback)
@@ -263,23 +276,23 @@ class SettingsWidget(QtWidgets.QWidget):
         if device_id is not None:
             self.config.audio_input_device_id = int(device_id)
             logging.info(f"Selected audio device: {device_id}")
-            
+
             # Populate channels for the new device (signals already blocked inside)
             self._populate_channels(device_id)
-            
+
             # Block signals while setting default channels to prevent duplicate saves
             if self._channel_left_combo:
                 self._channel_left_combo.blockSignals(True)
             if self._channel_right_combo:
                 self._channel_right_combo.blockSignals(True)
-            
+
             try:
                 # Reset to default channels [0, 1] when device changes
                 if self._channel_left_combo and self._channel_left_combo.count() > 0:
                     self._channel_left_combo.setCurrentIndex(0)
                 if self._channel_right_combo and self._channel_right_combo.count() > 1:
                     self._channel_right_combo.setCurrentIndex(1)
-                
+
                 # Save default channels
                 self.config.audio_selected_channels = [0, 1]
             finally:
@@ -288,7 +301,7 @@ class SettingsWidget(QtWidgets.QWidget):
                     self._channel_left_combo.blockSignals(False)
                 if self._channel_right_combo:
                     self._channel_right_combo.blockSignals(False)
-            
+
             # Signal that audio settings changed, requiring beat detector restart
             self.audio_settings_changed.emit()
 
@@ -303,21 +316,23 @@ class SettingsWidget(QtWidgets.QWidget):
         """Save selected channels when either channel combo changes."""
         if self._channel_left_combo is None or self._channel_right_combo is None:
             return
-            
+
         left_channel = self._channel_left_combo.currentData()
-        right_channel = self._channel_right_combo.currentData()# here we get 0,0
-        
+        right_channel = self._channel_right_combo.currentData()
+
         if left_channel is not None and right_channel is not None:
             # Validate against device capabilities
             device_id = self.config.audio_input_device_id
             if device_id is not None:
                 try:
-                    info = self._pyaudio.get_device_info_by_index(device_id)
-                    max_channels = int(info.get("maxInputChannels", 2))
-                    
+                    info = sd.query_devices(device_id)
+                    max_channels = int(info.get("max_input_channels", 2))
+
                     # If selected channels exceed device capabilities, reset to [0, 1]
                     if left_channel >= max_channels or right_channel >= max_channels:
-                        logging.warning(f"Selected channels [{left_channel}, {right_channel}] exceed device max {max_channels}, resetting to [0, 1]")
+                        logging.warning(
+                            f"Selected channels [{left_channel}, {right_channel}] exceed device max {max_channels}, resetting to [0, 1]"
+                        )
                         left_channel = 0
                         right_channel = 1
                         self._channel_left_combo.setCurrentIndex(0)
@@ -327,25 +342,26 @@ class SettingsWidget(QtWidgets.QWidget):
                     logging.error(f"Error validating channels: {e}")
                     left_channel = 0
                     right_channel = 1
-            
+
             self.config.audio_selected_channels = [left_channel, right_channel]
             logging.info(f"Selected channels: {[left_channel, right_channel]}")
             self.audio_settings_changed.emit()
 
     def _on_lock_delay_changed(self, state: int) -> None:
-        self.config.lock_delay = (state == QtCore.Qt.CheckState.Checked.value)
+        self.config.lock_delay = state == QtCore.Qt.CheckState.Checked.value
         logging.info(f"Lock delay changed to: {self.config.lock_delay}")
         self.settings_changed.emit()
 
     def _on_lock_feedback_changed(self, state: int) -> None:
-        self.config.lock_feedback = (state == QtCore.Qt.CheckState.Checked.value)
+        self.config.lock_feedback = state == QtCore.Qt.CheckState.Checked.value
         logging.info(f"Lock feedback changed to: {self.config.lock_feedback}")
         self.settings_changed.emit()
 
     def _on_lock_pitch_changed(self, state: int) -> None:
-        self.config.lock_pitch = (state == QtCore.Qt.CheckState.Checked.value)
+        self.config.lock_pitch = state == QtCore.Qt.CheckState.Checked.value
         logging.info(f"Lock pitch changed to: {self.config.lock_pitch}")
         self.settings_changed.emit()
 
     def __del__(self) -> None:
-        self._pyaudio.terminate()
+        # sounddevice cleans up automatically, no explicit cleanup needed
+        pass

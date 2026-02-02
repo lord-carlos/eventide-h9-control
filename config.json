@@ -59,14 +59,18 @@
                 "pull": "up",
                 "edge": "falling",
                 "debounce_ms": 10,
-                "hold_threshold_ms": 500
+                "hold_threshold_ms": 500,
+                "is_modifier": false,
+                "modifier_name": null
             },
             "settings": {
                 "pin": 22,
                 "pull": "up",
                 "edge": "falling",
                 "debounce_ms": 10,
-                "hold_threshold_ms": 500
+                "hold_threshold_ms": 500,
+                "is_modifier": false,
+                "modifier_name": null
             },
             "encoder_1_push": {
                 "pin": 23,
@@ -82,14 +86,18 @@
                 "pull": "up",
                 "edge": "falling",
                 "debounce_ms": 10,
-                "hold_threshold_ms": 500
+                "hold_threshold_ms": 500,
+                "is_modifier": false,
+                "modifier_name": null
             },
             "next_preset": {
                 "pin": 5,
                 "pull": "up",
                 "edge": "falling",
                 "debounce_ms": 10,
-                "hold_threshold_ms": 500
+                "hold_threshold_ms": 500,
+                "is_modifier": false,
+                "modifier_name": null
             }
         },
         "rotary_encoders": {
@@ -109,19 +117,22 @@
                 "clk_pin": 21,
                 "dt_pin": 26,
                 "action_cw": "adjust_knob_2_up",
-                "action_ccw": "adjust_knob_2_down"
+                "action_ccw": "adjust_knob_2_down",
+                "modifiers": {}
             },
             "knob_3_encoder": {
                 "clk_pin": 1,
                 "dt_pin": 4,
                 "action_cw": "adjust_knob_3_up",
-                "action_ccw": "adjust_knob_3_down"
+                "action_ccw": "adjust_knob_3_down",
+                "modifiers": {}
             },
             "knob_4_encoder": {
                 "clk_pin": 20,
                 "dt_pin": 16,
                 "action_cw": "adjust_knob_4_up",
-                "action_ccw": "adjust_knob_4_down"
+                "action_ccw": "adjust_knob_4_down",
+                "modifiers": {}
             }
         }
     },

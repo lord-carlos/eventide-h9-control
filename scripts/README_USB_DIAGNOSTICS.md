@@ -1,6 +1,21 @@
 # USB Audio Diagnostics
 
-This directory contains diagnostic scripts to investigate and potentially fix USB audio buffer overrun issues on Raspberry Pi with the XONE 96 audio interface.
+This directory contains diagnostic scripts to investigate and potentially fix USB audio buffer overrun issues on Raspberry Pi with XONE 96 audio interface.
+
+## Status
+
+✅ **RESOLVED**: The issue has been diagnosed and `beat_detector.py` has been migrated from PyAudio to `sounddevice` library.
+
+**Root Cause**: USB buffer overruns on XHCI (USB 3.0) controller causing audio stream to return stale data.
+
+**Solution**: Migrated to `sounddevice` which provides:
+- Explicit XRUN detection via `CallbackFlags`
+- Better error handling
+- Zero USB buffer overruns in testing (10 minutes stable vs ~8 seconds with PyAudio)
+
+**Implementation**: `h9control/audio/beat_detector.py` now uses sounddevice with auto-recovery enabled by default.
+
+---
 
 ## The Problem
 
