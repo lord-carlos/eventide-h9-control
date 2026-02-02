@@ -85,14 +85,18 @@ class BeatDetector(QObject):
         self.stream: sd.InputStream | None = None
         self._stream_lock = threading.Lock()
 
-        # Queue for callback data passing (thread-safe)
-        self.audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
+        # Queue for callback data passing (thread-safe) - large to handle analysis spikes
+        self.audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=2000)
 
         # Stream monitoring and recovery
         self._needs_recovery = False
         self.recovery_attempts = 0
         self.last_recovery_time: float = 0.0
         self.total_recoveries = 0
+
+        # Buffer health tracking
+        self.last_buffer_update: float = 0.0
+        self.buffer_stalled = False
 
     def _audio_callback(
         self, indata: np.ndarray, frames: int, time_info, status: sd.CallbackFlags
@@ -102,15 +106,12 @@ class BeatDetector(QObject):
 
         Runs at high priority, must be fast and non-blocking.
         """
-        # Track XRUN conditions
+        # Track XRUN conditions - overflow means hardware dropped frames
         if status.input_overflow:
-            logging.error(
-                f"Audio input overflow detected! Total: {status.input_overflow}"
-            )
+            logging.error(f"Audio input overflow! Total: {status.input_overflow}")
+            self._needs_recovery = True
         if status.input_underflow:
-            logging.warning(
-                f"Audio input underflow detected! Total: {status.input_underflow}"
-            )
+            logging.warning(f"Audio input underflow! Total: {status.input_underflow}")
 
         # Flatten stereo input (shape: [frames, channels] -> [samples])
         samples = indata.flatten()
@@ -254,9 +255,19 @@ class BeatDetector(QObject):
                 # Append to deque (thread-safe extension)
                 with self.buffer_lock:
                     self.audio_buffer.extend(stereo_samples)
+                    self.last_buffer_update = time.time()
 
             except queue.Empty:
                 # No audio available yet (normal, callback hasn't fired)
+                # Check buffer health - if no updates for >2 seconds, force recovery
+                time_since_update = time.time() - self.last_buffer_update
+                if time_since_update > 2.0 and self.last_buffer_update > 0:
+                    logging.error(
+                        f"Buffer stall detected! No updates for {time_since_update:.1f}s"
+                    )
+                    self._needs_recovery = True
+                    self.buffer_stalled = True
+
                 # Check if we need recovery
                 if (
                     getattr(self, "_needs_recovery", False)
@@ -280,10 +291,16 @@ class BeatDetector(QObject):
             time.sleep(UPDATE_INTERVAL)
 
             snapshot = None
+            buffer_copy = None
             with self.buffer_lock:
                 # Check if we have enough data (at least a significant portion of buffer)
                 if len(self.audio_buffer) >= self.update_samples:
-                    snapshot = np.array(self.audio_buffer, dtype=np.float32)
+                    # Fast copy under lock, then release lock before numpy conversion
+                    buffer_copy = list(self.audio_buffer)
+
+            if buffer_copy is not None:
+                # Heavy numpy conversion happens OUTSIDE the lock
+                snapshot = np.array(buffer_copy, dtype=np.float32)
 
             if snapshot is not None and len(snapshot) > 0:
                 self._calculate_bpm(snapshot)
@@ -330,6 +347,19 @@ class BeatDetector(QObject):
 
         # Close existing stream
         self._cleanup_stream()
+
+        # Clear all stale audio data to prevent processing old buffers
+        with self.buffer_lock:
+            self.audio_buffer.clear()
+            # Clear the queue to remove stale chunks
+            while not self.audio_queue.empty():
+                try:
+                    self.audio_queue.get_nowait()
+                except queue.Empty:
+                    break
+            self.last_buffer_update = 0.0
+            self.buffer_stalled = False
+            logging.info("Cleared audio buffers for fresh start")
 
         # Wait for USB device to settle
         time.sleep(0.5)

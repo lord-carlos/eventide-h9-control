@@ -770,7 +770,7 @@ class H9DeviceWorker(QtCore.QObject):
             )
 
     def _emit_state(self, state: DashboardState) -> None:
-        self._logger.debug(f"_emit_state called: {state}")
+        #self._logger.debug(f"_emit_state called: {state}")
         # Always update live_bpm in state if available, and check for auto-sync
         if self._live_bpm is not None:
             state = dataclasses.replace(state, live_bpm=self._live_bpm)
