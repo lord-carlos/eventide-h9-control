@@ -601,7 +601,10 @@ class BeatDetector(QObject):
             valid_ibis = ibis[(ibis > min_ibi) & (ibis < max_ibi)]
 
             if len(valid_ibis) == 0:
-                logging.debug("No valid beat intervals found")
+                logging.warning(
+                    f"Beats outside valid BPM range, resetting to {START_BPM} BPM"
+                )
+                self.bpm = START_BPM
                 return
 
             # Cluster Averaging for precision
