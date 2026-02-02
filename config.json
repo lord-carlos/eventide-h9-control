@@ -149,5 +149,6 @@
         "RESNCE",
         "SLURM",
         "TAPER"
-    ]
+    ],
+    "theme_mode": "system"
 }

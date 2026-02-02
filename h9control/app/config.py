@@ -85,6 +85,7 @@ class AppConfig:
     lock_feedback: bool = False
     lock_pitch: bool = False
     knob_order: tuple[str, ...] = ("DLY-A", "DLY-B", "FBK-A", "FBK-B")
+    theme_mode: str = "system"  # "system", "light", or "dark"
 
     @classmethod
     def default(cls) -> AppConfig:
@@ -159,6 +160,7 @@ class ConfigManager:
                     "knob_order", ["DLY-A", "DLY-B", "FBK-A", "FBK-B"]
                 )
                 knob_order = tuple(knob_order_list)
+                theme_mode = data.get("theme_mode", "system")
 
                 return AppConfig(
                     audio=audio_config,
@@ -167,6 +169,7 @@ class ConfigManager:
                     lock_feedback=lock_feedback,
                     lock_pitch=lock_pitch,
                     knob_order=knob_order,
+                    theme_mode=theme_mode,
                 )
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
@@ -249,4 +252,13 @@ class ConfigManager:
     @knob_order.setter
     def knob_order(self, value: tuple[str, ...]) -> None:
         self.config.knob_order = value
+        self.save()
+
+    @property
+    def theme_mode(self) -> str:
+        return self.config.theme_mode
+
+    @theme_mode.setter
+    def theme_mode(self, value: str) -> None:
+        self.config.theme_mode = value
         self.save()

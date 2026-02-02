@@ -167,6 +167,22 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_lock_pitch.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_lock_pitch, self._lock_pitch_checkbox)
 
+        # Theme Selection
+        self._theme_combo = QtWidgets.QComboBox()
+        self._theme_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
+        self._theme_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
+        self._theme_combo.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._theme_combo.addItem("System", userData="system")
+        self._theme_combo.addItem("Light", userData="light")
+        self._theme_combo.addItem("Dark", userData="dark")
+        self._theme_combo.addItem("Darker", userData="darker")
+        self._theme_combo.addItem("Crazy", userData="crazy")
+        self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+
+        lbl_theme = QtWidgets.QLabel("Theme:")
+        lbl_theme.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_theme, self._theme_combo)
+
         layout.addLayout(form_layout)
         layout.addStretch()
 
@@ -282,6 +298,12 @@ class SettingsWidget(QtWidgets.QWidget):
         self._lock_feedback_checkbox.setChecked(self.config.lock_feedback)
         self._lock_pitch_checkbox.setChecked(self.config.lock_pitch)
 
+        # Theme
+        theme_mode = self.config.theme_mode
+        theme_idx = self._theme_combo.findData(theme_mode)
+        if theme_idx >= 0:
+            self._theme_combo.setCurrentIndex(theme_idx)
+
     def _on_device_changed(self, index: int) -> None:
         device_id = self._device_combo.itemData(index)
         if device_id is not None:
@@ -372,6 +394,13 @@ class SettingsWidget(QtWidgets.QWidget):
         self.config.lock_pitch = state == QtCore.Qt.CheckState.Checked.value
         logging.info(f"Lock pitch changed to: {self.config.lock_pitch}")
         self.settings_changed.emit()
+
+    def _on_theme_changed(self, index: int) -> None:
+        theme_mode = self._theme_combo.itemData(index)
+        if theme_mode is not None:
+            self.config.theme_mode = theme_mode
+            logging.info(f"Theme changed to: {theme_mode}")
+            self.settings_changed.emit()
 
     def __del__(self) -> None:
         # sounddevice cleans up automatically, no explicit cleanup needed
