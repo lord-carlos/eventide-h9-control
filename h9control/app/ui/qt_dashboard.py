@@ -248,6 +248,10 @@ class DashboardWidget(QtWidgets.QWidget):
         self._lbl_live_bpm.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self._lbl_live_bpm.setTextFormat(QtCore.Qt.TextFormat.RichText)
         self._lbl_live_bpm.setStyleSheet("border: 1px solid #444; border-radius: 4px;")
+        self._lbl_live_bpm.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._lbl_live_bpm.mousePressEvent = (
+            lambda ev: self.sync_live_bpm_requested.emit()
+        )
 
         self._fonts = fonts
 
