@@ -1,12 +1,12 @@
-"""Librosa-based beat detector with rolling buffer and Qt signal integration."""
+"""Librosa-based beat detector with lock-free ring buffer for Raspberry Pi."""
 
 from __future__ import annotations
 
 import logging
-import queue
+import os
 import threading
 import time
-from collections import deque
+from typing import List
 
 import librosa
 import numpy as np
@@ -44,13 +44,16 @@ CENTER = True  # Center the onset envelope
 FMAX = 8000.0  # Max frequency for mel spectrogram (lower = less CPU)
 FMIN = 20.0  # Min frequency for mel spectrogram
 
+# Performance settings
+MONO_MODE = False  # Set to True to use only first channel (halves CPU/USB bandwidth)
+
 
 class BeatDetector(QObject):
     """
-    Beat detector using librosa with a rolling audio buffer.
+    Beat detector using librosa with a lock-free ring buffer for real-time audio.
 
-    Captures audio continuously using sounddevice callback, maintains a rolling buffer
-    of BUFFER_DURATION seconds, and recalculates BPM every UPDATE_INTERVAL seconds.
+    Captures audio continuously using sounddevice callback with zero-copy ring buffer,
+    eliminates GIL contention, and provides fault detection for silent failures.
     """
 
     bpm_detected = Signal(float)
@@ -59,44 +62,55 @@ class BeatDetector(QObject):
         super().__init__()
         self.config = config
         self.running = False
-        self.capture_thread: threading.Thread | None = None
         self.analysis_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # Audio parameters (sample rate may be adjusted to device native rate)
         self.sample_rate = SAMPLE_RATE
         self.buffer_size = BUFFER_SIZE
+        self.mono_mode = MONO_MODE
 
-        # Selected channels for beat detection (stereo)
+        # Selected channels for beat detection
         self.selected_channels = self.config.audio_selected_channels
 
-        # Calculate buffer sizes (will be recalculated if sample rate changes)
+        # Calculate buffer sizes
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
 
-        # Rolling audio buffer (circular buffer using deque) - stores stereo samples
-        self.buffer_lock = threading.Lock()
-        self.audio_buffer: deque = deque(maxlen=self.buffer_samples)
+        # Ring buffer - lock-free circular buffer
+        # Stores interleaved stereo samples or mono
+        channels = 1 if self.mono_mode else 2
+        self.ring_buffer = np.zeros(self.buffer_samples * channels, dtype=np.float32)
+        self.ring_size = len(self.ring_buffer)
+
+        # Atomic indices (only audio callback writes write_index)
+        self._write_lock = threading.Lock()  # Only for atomic index update
+        self.write_index = 0
+        self.total_samples_written = 0  # Monotonic counter
+
+        # Analysis tracking
+        self.last_read_total = 0  # Total samples read by analysis
 
         # Current BPM value
         self.bpm: float = 0.0
+        self._last_calculated_bpm: float = 0.0  # Track previous BPM for stale detection
+        self.last_bpm_time: float = 0.0  # When BPM last changed
+        self.same_bpm_count: int = 0  # Count of identical BPM readings
 
         # sounddevice setup
         self.stream: sd.InputStream | None = None
         self._stream_lock = threading.Lock()
-
-        # Queue for callback data passing (thread-safe) - large to handle analysis spikes
-        self.audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=2000)
 
         # Stream monitoring and recovery
         self._needs_recovery = False
         self.recovery_attempts = 0
         self.last_recovery_time: float = 0.0
         self.total_recoveries = 0
+        self.stream_dead = False  # True when recovery fails permanently
 
         # Buffer health tracking
-        self.last_buffer_update: float = 0.0
-        self.buffer_stalled = False
+        self.last_callback_time: float = 0.0
+        self.callback_stall_count: int = 0
 
     def _audio_callback(
         self, indata: np.ndarray, frames: int, time_info, status: sd.CallbackFlags
@@ -104,7 +118,7 @@ class BeatDetector(QObject):
         """
         Audio callback - called by sounddevice for each audio block.
 
-        Runs at high priority, must be fast and non-blocking.
+        Zero-copy: writes directly to ring buffer. Minimal GIL usage.
         """
         # Track XRUN conditions - overflow means hardware dropped frames
         if status.input_overflow:
@@ -113,61 +127,93 @@ class BeatDetector(QObject):
         if status.input_underflow:
             logging.warning(f"Audio input underflow! Total: {status.input_underflow}")
 
-        # Flatten stereo input (shape: [frames, channels] -> [samples])
-        samples = indata.flatten()
+        # Extract samples based on mono/stereo mode
+        if self.mono_mode:
+            # Take first channel only
+            samples = indata[:, 0].astype(np.float32)
+        else:
+            # Extract selected stereo channels
+            samples = self._extract_stereo_channels_fast(indata)
 
-        # Extract selected channels and keep as stereo
+        # Write to ring buffer
+        sample_count = len(samples)
+
+        with self._write_lock:
+            write_pos = self.write_index % self.ring_size
+
+            # Handle wrap-around within this callback
+            if write_pos + sample_count <= self.ring_size:
+                # No wrap - single copy
+                self.ring_buffer[write_pos : write_pos + sample_count] = samples
+            else:
+                # Wrap around - two copies
+                first_part = self.ring_size - write_pos
+                self.ring_buffer[write_pos:] = samples[:first_part]
+                self.ring_buffer[: sample_count - first_part] = samples[first_part:]
+
+            # Update indices
+            self.write_index += sample_count
+            self.total_samples_written += sample_count
+            self.last_callback_time = time.time()
+
+    def _extract_stereo_channels_fast(self, indata: np.ndarray) -> np.ndarray:
+        """
+        Fast stereo extraction from multi-channel input.
+
+        Args:
+            indata: Array of shape [frames, channels]
+
+        Returns:
+            Interleaved stereo array [L, R, L, R, ...]
+        """
         total_channels = indata.shape[1]
-        stereo_samples = self._extract_stereo_channels(samples, total_channels)
+        num_frames = indata.shape[0]
 
-        # Put in queue (non-blocking, drops if full to avoid callback blocking)
-        try:
-            self.audio_queue.put_nowait(stereo_samples)
-        except queue.Full:
-            logging.warning("Audio queue full, dropping audio block")
+        if total_channels == 1:
+            # Mono input - duplicate to stereo
+            return np.repeat(indata[:, 0], 2)
+
+        # Extract selected channels
+        left_idx = min(self.selected_channels[0], total_channels - 1)
+        right_idx = min(self.selected_channels[1], total_channels - 1)
+
+        left = indata[:, left_idx]
+        right = indata[:, right_idx]
+
+        # Interleave: [L0, R0, L1, R1, ...]
+        stereo = np.empty(num_frames * 2, dtype=np.float32)
+        stereo[0::2] = left
+        stereo[1::2] = right
+
+        return stereo
 
     def start(self) -> None:
-        """Start the beat detection threads."""
+        """Start the beat detection."""
         if self.running:
             return
 
         self.running = True
         self._stop_event.clear()
+        self.stream_dead = False
 
-        # Start capture thread
-        self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.capture_thread.start()
+        # Open stream directly (no capture thread needed)
+        if not self._start_stream():
+            self.running = False
+            return
 
-        # Start analysis thread
+        # Start analysis thread with lower priority
         self.analysis_thread = threading.Thread(target=self._analysis_loop, daemon=True)
         self.analysis_thread.start()
 
-        logging.info("BeatDetector started.")
+        logging.info("BeatDetector started with ring buffer.")
 
-    def stop(self) -> None:
-        """Stop the beat detection thread."""
-        if not self.running:
-            return
-        self.running = False
-        self._stop_event.set()
-
-        if self.capture_thread and self.capture_thread.is_alive():
-            self.capture_thread.join(timeout=2.0)
-        self.capture_thread = None
-
-        if self.analysis_thread and self.analysis_thread.is_alive():
-            self.analysis_thread.join(timeout=2.0)
-        self.analysis_thread = None
-
-        logging.info("BeatDetector stopped.")
-
-    def _capture_loop(self) -> None:
-        """Thread 1: Audio Capture Loop - processes callback data."""
+    def _start_stream(self) -> bool:
+        """Open and start the audio stream."""
         input_device_index = self.config.audio_input_device_id
 
         # Read selected channels from config
         self.selected_channels = self.config.audio_selected_channels
-        if len(self.selected_channels) < 2:
+        if len(self.selected_channels) < 2 and not self.mono_mode:
             logging.warning(
                 f"Invalid selected_channels {self.selected_channels}, using [0, 1]"
             )
@@ -184,8 +230,7 @@ class BeatDetector(QObject):
                 input_device_index = int(default_info["index"])
             except Exception as e:
                 logging.error(f"No default input device found: {e}")
-                self.running = False
-                return
+                return False
 
         # Get device info and adjust sample rate to native rate
         try:
@@ -233,85 +278,141 @@ class BeatDetector(QObject):
             )
             input_device_index = self._find_fallback_device(channels)
             if input_device_index is None:
-                self.running = False
-                return
+                return False
 
         # Open stream with sounddevice
         if not self._open_stream(input_device_index, channels):
-            self.running = False
-            return
+            return False
 
         logging.info(
             f"Listening for beats on device {input_device_index} at {self.sample_rate}Hz "
-            f"(buffer: {BUFFER_DURATION}s, update: {UPDATE_INTERVAL}s)"
+            f"(buffer: {BUFFER_DURATION}s, update: {UPDATE_INTERVAL}s, "
+            f"mode: {'mono' if self.mono_mode else 'stereo'})"
         )
 
-        # Main loop: consume audio from queue
-        while self.running and not self._stop_event.is_set():
-            try:
-                # Get audio block from queue (with timeout to check stop event)
-                stereo_samples = self.audio_queue.get(timeout=0.1)
+        return True
 
-                # Append to deque (thread-safe extension)
-                with self.buffer_lock:
-                    self.audio_buffer.extend(stereo_samples)
-                    self.last_buffer_update = time.time()
+    def stop(self) -> None:
+        """Stop the beat detection."""
+        if not self.running:
+            return
+        self.running = False
+        self._stop_event.set()
 
-            except queue.Empty:
-                # No audio available yet (normal, callback hasn't fired)
-                # Check buffer health - if no updates for >2 seconds, force recovery
-                time_since_update = time.time() - self.last_buffer_update
-                if time_since_update > 2.0 and self.last_buffer_update > 0:
-                    logging.error(
-                        f"Buffer stall detected! No updates for {time_since_update:.1f}s"
-                    )
-                    self._needs_recovery = True
-                    self.buffer_stalled = True
-
-                # Check if we need recovery
-                if (
-                    getattr(self, "_needs_recovery", False)
-                    and self._should_attempt_recovery()
-                ):
-                    if self._attempt_recovery():
-                        logging.info("Stream recovered successfully")
-                    else:
-                        logging.error("Stream recovery failed")
-                continue
-            except Exception as e:
-                if self.running:
-                    logging.error(f"Error processing audio: {e}")
-                    time.sleep(0.1)
+        if self.analysis_thread and self.analysis_thread.is_alive():
+            self.analysis_thread.join(timeout=2.0)
+        self.analysis_thread = None
 
         self._cleanup_stream()
+        logging.info("BeatDetector stopped.")
+
+    def _recalculate_buffer_sizes(self) -> None:
+        """Recalculate buffer sizes based on current sample rate."""
+        self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
+        self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
+
+        # Recreate ring buffer
+        channels = 1 if self.mono_mode else 2
+        self.ring_buffer = np.zeros(self.buffer_samples * channels, dtype=np.float32)
+        self.ring_size = len(self.ring_buffer)
+
+        # Reset indices
+        self.write_index = 0
+        self.total_samples_written = 0
+        self.last_read_total = 0
 
     def _analysis_loop(self) -> None:
-        """Thread 2: Analysis Loop - heavy processing without blocking capture."""
+        """Analysis Loop - heavy processing at lower priority."""
+        # Lower thread priority to reduce callback jitter
+        try:
+            os.nice(10)
+            logging.debug("Analysis thread priority lowered")
+        except Exception:
+            pass
+
         while self.running and not self._stop_event.is_set():
             time.sleep(UPDATE_INTERVAL)
 
-            snapshot = None
-            buffer_copy = None
-            with self.buffer_lock:
-                # Check if we have enough data (at least a significant portion of buffer)
-                if len(self.audio_buffer) >= self.update_samples:
-                    # Fast copy under lock, then release lock before numpy conversion
-                    buffer_copy = list(self.audio_buffer)
+            # Check for stream death
+            if self.stream_dead:
+                logging.error("Stream is dead, stopping analysis")
+                self.bpm_detected.emit(-1.0)
+                break
 
-            if buffer_copy is not None:
-                # Heavy numpy conversion happens OUTSIDE the lock
-                snapshot = np.array(buffer_copy, dtype=np.float32)
+            # Check for callback stall (>2 seconds without callback)
+            time_since_callback = time.time() - self.last_callback_time
+            if self.last_callback_time > 0 and time_since_callback > 2.0:
+                logging.error(
+                    f"Callback stall! No audio for {time_since_callback:.1f}s"
+                )
+                self.callback_stall_count += 1
+                self._needs_recovery = True
+
+                # Too many stalls = permanent failure
+                if self.callback_stall_count >= 3:
+                    logging.error("Too many callback stalls, marking stream as dead")
+                    self.stream_dead = True
+                    self.bpm_detected.emit(-1.0)
+                    break
+
+            # Check if we need recovery
+            if self._needs_recovery and self._should_attempt_recovery():
+                if self._attempt_recovery():
+                    logging.info("Stream recovered successfully")
+                else:
+                    logging.error("Stream recovery failed")
+                    self.stream_dead = True
+                    self.bpm_detected.emit(-1.0)
+                continue
+
+            # Check for new audio data
+            samples_available = self.total_samples_written - self.last_read_total
+            samples_needed = self.update_samples * (1 if self.mono_mode else 2)
+
+            if samples_available < samples_needed:
+                logging.debug(f"Not enough audio: {samples_available}/{samples_needed}")
+                continue
+
+            # Read from ring buffer
+            snapshot = self._read_ring_buffer(samples_needed)
+            self.last_read_total = self.total_samples_written
 
             if snapshot is not None and len(snapshot) > 0:
                 self._calculate_bpm(snapshot)
 
-    def _recalculate_buffer_sizes(self) -> None:
-        """Recalculate buffer sizes based on current sample rate."""
-        # Buffer stores interleaved stereo samples
-        self.buffer_samples = int(BUFFER_DURATION * self.sample_rate * 2)
-        self.update_samples = int(UPDATE_INTERVAL * self.sample_rate * 2)
-        with self.buffer_lock:
-            self.audio_buffer = deque(maxlen=self.buffer_samples)
+                # Check for stale BPM (same value repeated)
+                if self.bpm == self._last_calculated_bpm:
+                    self.same_bpm_count += 1
+                    if self.same_bpm_count >= 15:  # ~30 seconds
+                        logging.warning(
+                            f"BPM appears stuck at {self.bpm} for {self.same_bpm_count * 2}s"
+                        )
+                else:
+                    self.same_bpm_count = 0
+                    self._last_calculated_bpm = self.bpm
+
+    def _read_ring_buffer(self, sample_count: int) -> np.ndarray | None:
+        """
+        Read samples from ring buffer.
+
+        Handles wrap-around by potentially copying two segments.
+        """
+        with self._write_lock:
+            write_pos = self.write_index % self.ring_size
+
+        # Calculate read position (sample_count behind write)
+        read_pos = (self.write_index - sample_count) % self.ring_size
+
+        # Check if we need to handle wrap-around
+        if read_pos + sample_count <= self.ring_size:
+            # No wrap - single read
+            return self.ring_buffer[read_pos : read_pos + sample_count].copy()
+        else:
+            # Wrap around - read two segments and concatenate
+            first_part = self.ring_size - read_pos
+            segment1 = self.ring_buffer[read_pos:].copy()
+            segment2 = self.ring_buffer[: sample_count - first_part].copy()
+            return np.concatenate([segment1, segment2])
 
     def _should_attempt_recovery(self) -> bool:
         """Check if we should attempt stream recovery."""
@@ -348,41 +449,25 @@ class BeatDetector(QObject):
         # Close existing stream
         self._cleanup_stream()
 
-        # Clear all stale audio data to prevent processing old buffers
-        with self.buffer_lock:
-            self.audio_buffer.clear()
-            # Clear the queue to remove stale chunks
-            while not self.audio_queue.empty():
-                try:
-                    self.audio_queue.get_nowait()
-                except queue.Empty:
-                    break
-            self.last_buffer_update = 0.0
-            self.buffer_stalled = False
-            logging.info("Cleared audio buffers for fresh start")
+        # Clear ring buffer and reset indices
+        with self._write_lock:
+            self.ring_buffer.fill(0)
+            self.write_index = 0
+            self.total_samples_written = 0
+            self.last_callback_time = 0.0
+            logging.info("Cleared ring buffer for fresh start")
 
         # Wait for USB device to settle
         time.sleep(0.5)
 
-        # Get device index
-        input_device_index = self.config.audio_input_device_id
-        max_selected_channel = max(self.selected_channels)
-        channels = max_selected_channel + 1
-
-        if input_device_index is None:
-            try:
-                default_info = sd.query_devices(kind="input")
-                input_device_index = int(default_info["index"])
-            except Exception:
-                return False
-
-        # Try to reopen stream
-        if self._open_stream(input_device_index, channels):
+        # Reopen stream
+        if self._start_stream():
             logging.info(f"Recovery successful (attempt {attempt_num})")
             self.recovery_attempts = 0
             self.last_recovery_time = time.time()
             self.total_recoveries += 1
             self._needs_recovery = False
+            self.callback_stall_count = 0
             return True
         else:
             logging.error(f"Recovery failed on attempt {attempt_num}")
@@ -449,46 +534,15 @@ class BeatDetector(QObject):
                     self.stream = None
                     logging.info("Stream closed")
 
-    def _extract_stereo_channels(
-        self, interleaved_samples: np.ndarray, total_channels: int
-    ) -> np.ndarray:
-        """
-        Extract two selected channels from multi-channel interleaved audio and return as stereo.
-
-        Args:
-            interleaved_samples: Flat array of interleaved multi-channel samples
-            total_channels: Total number of channels in the interleaved data
-
-        Returns:
-            Stereo interleaved array (left, right, left, right, ...)
-        """
-        if total_channels == 1:
-            # Mono input - duplicate to stereo
-            return np.repeat(interleaved_samples, 2)
-
-        # Reshape interleaved data: (samples*channels,) -> (samples, channels)
-        num_frames = len(interleaved_samples) // total_channels
-        reshaped = interleaved_samples[: num_frames * total_channels].reshape(
-            -1, total_channels
-        )
-
-        # Extract selected channels
-        left_channel = reshaped[:, self.selected_channels[0]]
-        right_channel = reshaped[:, self.selected_channels[1]]
-
-        # Interleave to stereo: (L, R, L, R, ...)
-        stereo = np.empty(num_frames * 2, dtype=np.float32)
-        stereo[0::2] = left_channel
-        stereo[1::2] = right_channel
-
-        return stereo
-
     def _calculate_bpm(self, audio_data: np.ndarray) -> None:
         """Calculate BPM from the provided audio buffer using Inter-Beat Intervals (IBI)."""
         try:
             # Convert stereo to mono by averaging channels
-            # audio_data is interleaved stereo: [L, R, L, R, ...]
-            mono_audio = (audio_data[0::2] + audio_data[1::2]) / 2.0
+            if self.mono_mode:
+                mono_audio = audio_data
+            else:
+                # audio_data is interleaved stereo: [L, R, L, R, ...]
+                mono_audio = (audio_data[0::2] + audio_data[1::2]) / 2.0
 
             # Skip if buffer is mostly silence
             if np.max(np.abs(mono_audio)) < 0.01:
@@ -506,11 +560,9 @@ class BeatDetector(QObject):
             )
 
             # Adaptive starting BPM: if we have a valid previous reading, use it
-            # This prevents octave jumps (60 vs 120) and helps lock on
             current_start_bpm = self.bpm if self.bpm > 0 else START_BPM
 
             # Use beat_track to find beat locations
-            # tightness=100 helps lock onto stable beats in electronic music
             tempo, beats = librosa.beat.beat_track(
                 onset_envelope=onset_env,
                 sr=self.sample_rate,
@@ -531,7 +583,6 @@ class BeatDetector(QObject):
             ibis = np.diff(beat_times)
 
             # Filter out unreasonable intervals (outside 40-220 BPM range)
-            # 220 BPM ~= 0.27s, 40 BPM = 1.5s
             valid_ibis = ibis[(ibis > 0.27) & (ibis < 1.5)]
 
             if len(valid_ibis) == 0:
@@ -597,6 +648,4 @@ class BeatDetector(QObject):
 
     def __del__(self) -> None:
         """Cleanup on deletion."""
-        # sounddevice cleans up automatically when stream is closed
-        # No need to call terminate() like PyAudio
         pass
