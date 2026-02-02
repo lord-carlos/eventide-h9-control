@@ -12,6 +12,7 @@ dependencies = [
     "numba>=0.59",
     "numpy>=1.24,<2.4",
     "pyaudio>=0.2.14",
+    "sounddevice>=0.4.6",
     # PySide6 pinned to 6.7.x for Raspberry Pi ARM64 compatibility.
     # v6.8+ requires glibc 2.39, unavailable on Raspberry Pi OS.
     # v6.7 has manylinux_2_28 wheels, compatible with Raspberry Pi OS.
