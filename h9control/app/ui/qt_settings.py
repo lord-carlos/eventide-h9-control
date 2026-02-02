@@ -7,6 +7,7 @@ import sounddevice as sd
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from h9control.app.config import ConfigManager
+from h9control.hardware.backlight import BacklightController
 
 # Touch-friendly sizing constants
 COMBOBOX_MIN_HEIGHT = 50  # Minimum height for dropdown selectors
@@ -44,6 +45,8 @@ class SettingsWidget(QtWidgets.QWidget):
         self.config = config
         self._channel_left_combo: QtWidgets.QComboBox | None = None
         self._channel_right_combo: QtWidgets.QComboBox | None = None
+        self._brightness_slider: QtWidgets.QSlider | None = None
+        self._backlight = BacklightController()
 
         self._init_ui()
         self._load_settings()
@@ -183,6 +186,17 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_theme.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_theme, self._theme_combo)
 
+        # Display Brightness Slider
+        self._brightness_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._brightness_slider.setRange(10, 100)
+        self._brightness_slider.setMinimumWidth(COMBOBOX_MIN_WIDTH)
+        self._brightness_slider.setMinimumHeight(40)
+        self._brightness_slider.valueChanged.connect(self._on_brightness_changed)
+
+        lbl_brightness = QtWidgets.QLabel("Brightness:")
+        lbl_brightness.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_brightness, self._brightness_slider)
+
         layout.addLayout(form_layout)
         layout.addStretch()
 
@@ -304,6 +318,19 @@ class SettingsWidget(QtWidgets.QWidget):
         if theme_idx >= 0:
             self._theme_combo.setCurrentIndex(theme_idx)
 
+        # Brightness - read from hardware and gray out if not available
+        if self._brightness_slider:
+            if self._backlight.is_available():
+                current = self._backlight.get_brightness_percent()
+                if current is not None:
+                    self._brightness_slider.setValue(current)
+                self._brightness_slider.setEnabled(True)
+            else:
+                self._brightness_slider.setEnabled(False)
+                # Find the label for brightness and gray it out
+                # The label is at index -2 in the form layout (row before last)
+                # We can't easily get it, so we just disable the slider
+
     def _on_device_changed(self, index: int) -> None:
         device_id = self._device_combo.itemData(index)
         if device_id is not None:
@@ -401,6 +428,14 @@ class SettingsWidget(QtWidgets.QWidget):
             self.config.theme_mode = theme_mode
             logging.info(f"Theme changed to: {theme_mode}")
             self.settings_changed.emit()
+
+    def _on_brightness_changed(self, value: int) -> None:
+        """Handle brightness slider change."""
+        if self._backlight.is_available():
+            success = self._backlight.set_brightness_percent(value)
+            if not success:
+                # Disable slider if write failed (permission denied)
+                self._brightness_slider.setEnabled(False)
 
     def __del__(self) -> None:
         # sounddevice cleans up automatically, no explicit cleanup needed
