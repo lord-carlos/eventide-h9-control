@@ -54,6 +54,62 @@ def configure_combobox_for_touch(combo: QtWidgets.QComboBox) -> None:
         view.setMinimumHeight(300)  # Make popup taller overall
 
 
+class TouchScrollHandler(QtCore.QObject):
+    """Handles touch/mouse drag scrolling for QScrollArea."""
+
+    def __init__(self, scroll_area: QtWidgets.QScrollArea) -> None:
+        super().__init__(scroll_area)
+        self._scroll_area = scroll_area
+        self._dragging = False
+        self._last_y: float = 0.0
+
+        # Install event filter on the viewport
+        viewport = scroll_area.viewport()
+        if viewport:
+            viewport.installEventFilter(self)
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        """Filter touch/mouse events to implement drag scrolling."""
+        try:
+            if watched != self._scroll_area.viewport():
+                return False
+        except RuntimeError:
+            # Scroll area has been deleted
+            return False
+
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            # PySide6 mouse events work with direct attribute access
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:  # type: ignore
+                self._dragging = True
+                self._last_y = event.globalPosition().y()  # type: ignore
+                return True
+
+        elif event.type() == QtCore.QEvent.Type.MouseMove:
+            if self._dragging:
+                current_y = event.globalPosition().y()  # type: ignore
+                delta = self._last_y - current_y
+
+                # Scroll by the delta
+                try:
+                    scrollbar = self._scroll_area.verticalScrollBar()
+                    if scrollbar:
+                        scrollbar.setValue(scrollbar.value() + int(delta))
+                except RuntimeError:
+                    # Scroll area has been deleted
+                    self._dragging = False
+                    return False
+
+                self._last_y = current_y
+                return True
+
+        elif event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:  # type: ignore
+                self._dragging = False
+                return True
+
+        return False
+
+
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
     settings_changed = QtCore.Signal()  # Emitted when settings change that affect UI
@@ -68,6 +124,7 @@ class SettingsWidget(QtWidgets.QWidget):
         self._channel_right_combo: QtWidgets.QComboBox | None = None
         self._brightness_slider: QtWidgets.QSlider | None = None
         self._backlight = BacklightController()
+        self._scroll_area: QtWidgets.QScrollArea | None = None
 
         self._init_ui()
         self._load_settings()
@@ -87,7 +144,8 @@ class SettingsWidget(QtWidgets.QWidget):
         layout.addWidget(title)
 
         # Scroll area for form content
-        scroll_area = QtWidgets.QScrollArea()
+        self._scroll_area = QtWidgets.QScrollArea()
+        scroll_area = self._scroll_area
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
@@ -101,6 +159,9 @@ class SettingsWidget(QtWidgets.QWidget):
             QtCore.Qt.WidgetAttribute.WA_AcceptTouchEvents, True
         )
         scroll_area.grabGesture(QtCore.Qt.GestureType.PanGesture)
+
+        # Install drag-to-scroll handler for mouse/touch dragging
+        self._scroll_handler = TouchScrollHandler(scroll_area)
         scroll_area.setStyleSheet("""
             QScrollArea {
                 border: none;
