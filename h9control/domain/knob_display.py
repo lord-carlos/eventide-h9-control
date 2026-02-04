@@ -87,7 +87,7 @@ _TIMEFACTOR_DELAY_NOTE_POINTS: list[tuple[int, TimeDivision]] = [
     (124, TimeDivision.N1_1),
 ]
 
-
+# Can probably be deleted at some point.
 _TIMEFACTOR_ALGO_KEYS = {"DIGDLY", "VNTAGE", "TAPE", "MODDLY"}
 
 
@@ -176,13 +176,15 @@ def format_knob_value(
     name = knob_name.upper()
 
     # TimeFactor delay time knobs -> musical divisions
-    if algo in _TIMEFACTOR_ALGO_KEYS and name in {"DLY-A", "DLY-B"}:
+    if name in {"DLY-A", "DLY-B"}:
         div = quantize_timefactor_delay_note(raw_value)
         if div == TimeDivision.OFF:
             return QuantizedValue(label="No DLY", division=div)
         return QuantizedValue(label=str(div), division=div)
 
     # TimeFactor mix between A/B
+    # TODO: I think this should be:
+    # A10+B0 A10+B01 A10+B02 A10+B03 A10+B04 A10+B05 A10+B06 A10+B07 A10+B08 A10+B09 A10+B10 A09+B10 A08+B10 A07+B10 A06+B10 A05+B10 A04+B10 A03+B10 A02+B10 A01+B10 A00+B10
     if algo in _TIMEFACTOR_ALGO_KEYS and name == "DLYMIX":
         return QuantizedValue(label=format_timefactor_dlymix(raw_value), division=None)
 
