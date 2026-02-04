@@ -16,14 +16,22 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 - Double / halv BPM.
 - add to config "ignore these notes" 
 - view for traktor
+- [x] implement other bpm detection algorithm.
 - table for min og max value, and what kind of values. See the other repo. 
-- [x] implement other bpm detection algorithm. 
+    - [ ] DLY-X should always have the notes annotation
+    - [ ] Feedback should have - to 110 annotation
+    - [ ] RelMix  Discrete 21 A10+B0 A10+B01 A10+B02 A10+B03 A10+B04 A10+B05 A10+B06 A10+B07 A10+B08 A10+B09 A10+B10 A09+B10 A08+B10 A07+B10 A06+B10 A05+B10 A04+B10 A03+B10 A02+B10 A01+B10 A00+B10
+    - [ ] Depth   Int     ""      0     10    1
+    - [ ] Speed   Float   Hz      0.00  5.01
+    - [ ] Filter  Int     ""      -100  100   1
 
 
 ## Notes
 
 Effects I want to use:
-`DIGDLY, FLTDLY, ROOM, BKHOLE, ULTRA.T, M-FLTR`
+Done: `DIGDLY, FLTDLY, ULTRA.T`
+nein danke: `ROOM`
+maybe: `M-FLTR`
 
 ## UI Dashboard (Qt / PySide6)
 
