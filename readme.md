@@ -16,6 +16,7 @@ When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without
 - Double / halv BPM.
 - add to config "ignore these notes" 
 - view for traktor
+- [ ] sometimes 9/16 is seen as 1/2
 - [x] implement other bpm detection algorithm.
 - table for min og max value, and what kind of values. See the other repo. 
     - [ ] DLY-X should always have the notes annotation
