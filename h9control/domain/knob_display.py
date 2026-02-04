@@ -181,6 +181,14 @@ def format_knob_value(
         if div == TimeDivision.OFF:
             return QuantizedValue(label="No DLY", division=div)
         return QuantizedValue(label=str(div), division=div)
+    
+    # The feedback goes from 0 to 110%
+    if name in {"FBK-B", "FBK-A"}:
+        # scale from 0 to 110
+        feedback_pct = _pct_from_raw(raw_value) * 1.1
+        feedback_pct = max(0.0, min(110.0, feedback_pct))
+        label = f"{int(round(feedback_pct))}%"
+        return QuantizedValue(label=label, division=None)
 
     # TimeFactor mix between A/B
     # TODO: I think this should be:
