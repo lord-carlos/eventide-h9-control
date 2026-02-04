@@ -189,6 +189,13 @@ def format_knob_value(
         feedback_pct = max(0.0, min(110.0, feedback_pct))
         label = f"{int(round(feedback_pct))}%"
         return QuantizedValue(label=label, division=None)
+    
+    # Filter goes from -100 to 100
+    if name in {"FILTER"}:
+        filter_pct = (_pct_from_raw(raw_value) * 2.0) - 100.0
+        filter_pct = max(-100.0, min(100.0, filter_pct))
+        label = f"{int(round(filter_pct))}"
+        return QuantizedValue(label=label, division=None)
 
     # TimeFactor mix between A/B
     # TODO: I think this should be:
