@@ -141,6 +141,7 @@ def quantize_timefactor_delay_note_from_midi_cc(midi_cc: int) -> TimeDivision:
 
 def format_timefactor_dlymix(value: int) -> str:
     """Format TimeFactor DLYMIX as the pedal-style `A10 + B6`.
+    A10+B0 A10+B01 A10+B02 A10+B03 A10+B04 A10+B05 A10+B06 A10+B07 A10+B08 A10+B09 A10+B10 A09+B10 A08+B10 A07+B10 A06+B10 A05+B10 A04+B10 A03+B10 A02+B10 A01+B10 A00+B10
 
     Assumption (matches user's observation):
     - At center (50%), both are 10.
@@ -183,7 +184,7 @@ def format_knob_value(
         return QuantizedValue(label=str(div), division=div)
     
     # The feedback goes from 0 to 110%
-    if name in {"FBK-B", "FBK-A"}:
+    if name in {"FBK-B", "FBK-A", "FEEDBK"}:
         # scale from 0 to 110
         feedback_pct = _pct_from_raw(raw_value) * 1.1
         feedback_pct = max(0.0, min(110.0, feedback_pct))
@@ -195,6 +196,13 @@ def format_knob_value(
         filter_pct = (_pct_from_raw(raw_value) * 2.0) - 100.0
         filter_pct = max(-100.0, min(100.0, filter_pct))
         label = f"{int(round(filter_pct))}"
+        return QuantizedValue(label=label, division=None)
+    
+    # Speed goes from 0.00 to 5.01 in Hz
+    if name in {"SPEED"}:
+        speed_hz = (_pct_from_raw(raw_value) * 5.01) / 100.0
+        speed_hz = max(0.00, min(5.01, speed_hz))
+        label = f"{speed_hz:.2f} Hz"
         return QuantizedValue(label=label, division=None)
 
     # TimeFactor mix between A/B
