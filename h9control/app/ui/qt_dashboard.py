@@ -272,14 +272,16 @@ class DashboardWidget(QtWidgets.QWidget):
         dly_row = QtWidgets.QHBoxLayout()
         dly_row.setSpacing(_KNOB_GROUP_SPACING)
 
-        dly_group = QtWidgets.QWidget()
-        dly_group_layout = QtWidgets.QHBoxLayout(dly_group)
-        dly_group_layout.setContentsMargins(0, 0, 0, 0)
-        dly_group_layout.setSpacing(_KNOB_GROUP_SPACING)
-        dly_group_layout.addWidget(self._knob_slots[0], 1)
-        dly_group_layout.addWidget(self._knob_slots[1], 1)
-        # Store reference to ensure FBK group matches this width
-        self._dly_group = dly_group
+        top_group = QtWidgets.QWidget()
+        top_group.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        top_group_layout = QtWidgets.QHBoxLayout(top_group)
+        top_group_layout.setContentsMargins(0, 0, 0, 0)
+        top_group_layout.setSpacing(_KNOB_GROUP_SPACING)
+        top_group_layout.addWidget(self._knob_slots[0], 1)
+        top_group_layout.addWidget(self._knob_slots[1], 1)
 
         top_right = QtWidgets.QWidget()
         top_right.setFixedWidth(self._btn_bpm.width())
@@ -291,7 +293,7 @@ class DashboardWidget(QtWidgets.QWidget):
         )
 
         # Left-bound group (~50% width), empty spacer, then a fixed-width right area.
-        dly_row.addWidget(dly_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
+        dly_row.addWidget(top_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
         dly_row.addStretch(1)
         dly_row.addWidget(
             top_right,
@@ -332,17 +334,19 @@ class DashboardWidget(QtWidgets.QWidget):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(0)
 
-        fbk_group = QtWidgets.QWidget()
-        fbk_group_layout = QtWidgets.QHBoxLayout(fbk_group)
-        fbk_group_layout.setContentsMargins(0, 0, 0, 0)
-        fbk_group_layout.setSpacing(_KNOB_GROUP_SPACING)
-        fbk_group_layout.addWidget(self._knob_slots[2], 1)
-        fbk_group_layout.addWidget(self._knob_slots[3], 1)
-        # Store reference to sync width with DLY group
-        self._fbk_group = fbk_group
+        bottom_group = QtWidgets.QWidget()
+        bottom_group.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        bottom_group_layout = QtWidgets.QHBoxLayout(bottom_group)
+        bottom_group_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_group_layout.setSpacing(_KNOB_GROUP_SPACING)
+        bottom_group_layout.addWidget(self._knob_slots[2], 1)
+        bottom_group_layout.addWidget(self._knob_slots[3], 1)
 
         bottom_layout.addWidget(
-            fbk_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop
+            bottom_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop
         )
         bottom_layout.addStretch(1)
         bottom_layout.addWidget(
@@ -374,16 +378,6 @@ class DashboardWidget(QtWidgets.QWidget):
         self._apply_state(DashboardState(connected=False, status_text="Disconnected"))
 
         self._install_shortcuts()
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        """Keep DLY and FBK groups the same width."""
-        super().resizeEvent(event)
-        # Match FBK group width to DLY group width
-        if hasattr(self, "_dly_group") and hasattr(self, "_fbk_group"):
-            dly_width = self._dly_group.width()
-            if dly_width > 0:
-                self._fbk_group.setMaximumWidth(dly_width)
-                self._fbk_group.setMinimumWidth(dly_width)
 
     def _install_shortcuts(self) -> None:
         # Map action names to callables that trigger signals
