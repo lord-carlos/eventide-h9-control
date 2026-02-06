@@ -1,6 +1,6 @@
 [Unit]
 Description=Eventide H9 Control UI
-After=network.target
+After=network.target graphical.target getty@tty1.service
 Conflicts=zynthian.service zynthian-webconf.service jack2.service
 
 [Service]
@@ -16,4 +16,4 @@ Restart=always
 RestartSec=10
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
