@@ -12,7 +12,7 @@ WorkingDirectory=__PROJECT_DIR__
 Environment=XDG_RUNTIME_DIR=/run/user/__INSTALL_UID__
 Environment="WLR_RENDERER_ALLOW_SOFTWARE=1"
 # Wait 5 seconds for display to fully initialize
-ExecStartPre=/bin/sleep 5
+#ExecStartPre=/bin/sleep 5
 # Start labwc (Wayland compositor) and have it run our startup script
 ExecStart=/usr/bin/labwc -s __PROJECT_DIR__/linux/start-app.sh
 Restart=always
