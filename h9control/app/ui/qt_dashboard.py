@@ -114,6 +114,11 @@ class _LabeledProgress(QtWidgets.QWidget):
         self._raw_value.setStyleSheet("color: #888;")
         self._raw_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
 
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(_KNOB_INTERNAL_SPACING)
@@ -277,6 +282,7 @@ class DashboardWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
+
         top_group_layout = QtWidgets.QHBoxLayout(top_group)
         top_group_layout.setContentsMargins(0, 0, 0, 0)
         top_group_layout.setSpacing(_KNOB_GROUP_SPACING)
@@ -284,7 +290,7 @@ class DashboardWidget(QtWidgets.QWidget):
         top_group_layout.addWidget(self._knob_slots[1], 1)
 
         top_right = QtWidgets.QWidget()
-        top_right.setFixedWidth(self._btn_bpm.width())
+
         top_right_layout = QtWidgets.QHBoxLayout(top_right)
         top_right_layout.setContentsMargins(0, 0, 0, 0)
         top_right_layout.addStretch(1)
@@ -292,15 +298,9 @@ class DashboardWidget(QtWidgets.QWidget):
             self._status_dot, 0, alignment=QtCore.Qt.AlignmentFlag.AlignRight
         )
 
-        # Left-bound group (~50% width), empty spacer, then a fixed-width right area.
+        # Both sides get equal stretch (50/50 split)
         dly_row.addWidget(top_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
-        dly_row.addStretch(1)
-        dly_row.addWidget(
-            top_right,
-            0,
-            alignment=QtCore.Qt.AlignmentFlag.AlignTop
-            | QtCore.Qt.AlignmentFlag.AlignRight,
-        )
+        dly_row.addWidget(top_right, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
         top_layout.addLayout(dly_row)
 
         # --- center section ---
@@ -339,28 +339,28 @@ class DashboardWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
+
         bottom_group_layout = QtWidgets.QHBoxLayout(bottom_group)
         bottom_group_layout.setContentsMargins(0, 0, 0, 0)
         bottom_group_layout.setSpacing(_KNOB_GROUP_SPACING)
         bottom_group_layout.addWidget(self._knob_slots[2], 1)
         bottom_group_layout.addWidget(self._knob_slots[3], 1)
 
+        bottom_right = QtWidgets.QWidget()
+
+        bottom_right_layout = QtWidgets.QHBoxLayout(bottom_right)
+        bottom_right_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_right_layout.setSpacing(_KNOB_GROUP_SPACING)
+        bottom_right_layout.addStretch(1)
+        bottom_right_layout.addWidget(self._lbl_live_bpm)
+        bottom_right_layout.addWidget(self._btn_bpm)
+
+        # Both sides get equal stretch (50/50 split)
         bottom_layout.addWidget(
             bottom_group, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop
         )
-        bottom_layout.addStretch(1)
         bottom_layout.addWidget(
-            self._lbl_live_bpm,
-            0,
-            alignment=QtCore.Qt.AlignmentFlag.AlignTop
-            | QtCore.Qt.AlignmentFlag.AlignRight,
-        )
-        bottom_layout.addSpacing(_KNOB_GROUP_SPACING)
-        bottom_layout.addWidget(
-            self._btn_bpm,
-            0,
-            alignment=QtCore.Qt.AlignmentFlag.AlignTop
-            | QtCore.Qt.AlignmentFlag.AlignRight,
+            bottom_right, 1, alignment=QtCore.Qt.AlignmentFlag.AlignTop
         )
 
         # --- root layout ---
