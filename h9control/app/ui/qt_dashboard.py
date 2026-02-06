@@ -15,10 +15,10 @@ from h9control.app.state import DashboardState
 _DASHBOARD_SIZE = QtCore.QSize(1280, 720)
 
 # Typography (point sizes)
-_FONT_SIZE_TITLE = 36  # Preset name
-_FONT_SIZE_SUBTITLE = 22  # Algorithm, knob labels
-_FONT_SIZE_VALUE = 20  # BPM/Live numbers
-_FONT_SIZE_LABEL = 12  # "BPM"/"Live" text
+_FONT_SIZE_TITLE = 60  # Preset name
+_FONT_SIZE_SUBTITLE = 24  # Algorithm, knob labels
+_FONT_SIZE_VALUE = 26  # BPM/Live numbers
+_FONT_SIZE_LABEL = 16  # "BPM"/"Live" text
 _FONT_SIZE_RAW_VALUE = 11  # Raw value below progress bar
 
 # Layout spacing & margins
@@ -31,17 +31,17 @@ _KNOB_INTERNAL_SPACING = (
 
 # Layout stretch factors (vertical proportions)
 _STRETCH_TOP = 1  # Top section (DLY knobs)
-_STRETCH_CENTER = 2  # Center section (preset/algorithm)
+_STRETCH_CENTER = 4  # Center section (preset/algorithm)
 _STRETCH_BOTTOM = 1  # Bottom section (FBK knobs + BPM)
 _STRETCH_CENTER_TEXT_TOP = 1  # Stretch above preset name
 _STRETCH_CENTER_TEXT_BOTTOM = 1  # Stretch below algorithm
 
 # Widget dimensions
-_PROGRESS_BAR_HEIGHT = 18  # Progress bar thickness
-_BUTTON_PREV_NEXT_WIDTH = 120  # Width of ◀/▶ buttons
-_BUTTON_PREV_NEXT_HEIGHT = 120  # Height of ◀/▶ buttons
+_PROGRESS_BAR_HEIGHT = 22  # Progress bar thickness
+_BUTTON_PREV_NEXT_WIDTH = 125  # Width of ◀/▶ buttons
+_BUTTON_PREV_NEXT_HEIGHT = 250  # Height of ◀/▶ buttons
 _BUTTON_BPM_WIDTH = 180  # Width of BPM button
-_BUTTON_BPM_HEIGHT = 90  # Height of BPM button
+_BUTTON_BPM_HEIGHT = 120  # Height of BPM button
 _STATUS_DOT_SIZE = 64  # Status indicator dot
 
 
