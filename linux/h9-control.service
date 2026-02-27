@@ -1,7 +1,8 @@
 [Unit]
 Description=Eventide H9 Control UI
-After=network.target graphical.target
-Conflicts=zynthian.service zynthian-webconf.service 
+After=user-runtime-dir@0.service dev-dri-card0.device network.target jack2.service
+Wants=user-runtime-dir@0.service dev-dri-card0.device
+#Conflicts=zynthian.service zynthian-webconf.service 
 #jack2.service
 
 [Service]
@@ -12,7 +13,7 @@ WorkingDirectory=__PROJECT_DIR__
 Environment=XDG_RUNTIME_DIR=/run/user/__INSTALL_UID__
 Environment="WLR_RENDERER_ALLOW_SOFTWARE=1"
 # Wait 5 seconds for display to fully initialize
-ExecStartPre=/bin/sleep 5
+#ExecStartPre=/bin/sleep 5
 # Start labwc (Wayland compositor) and have it run our startup script
 ExecStart=/usr/bin/labwc -s __PROJECT_DIR__/linux/start-app.sh
 Restart=always
