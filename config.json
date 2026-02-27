@@ -51,6 +51,21 @@
             ],
             "prev_preset": [
                 "Left"
+            ],
+            "jump_to_preset_1": [
+                "Z"
+            ],
+            "jump_to_preset_2": [
+                "X"
+            ],
+            "jump_to_preset_3": [
+                "C"
+            ],
+            "jump_to_preset_4": [
+                "V"
+            ],
+            "jump_to_preset_5": [
+                "B"
             ]
         },
         "gpio": {
@@ -92,6 +107,15 @@
             },
             "next_preset": {
                 "pin": 5,
+                "pull": "up",
+                "edge": "falling",
+                "debounce_ms": 10,
+                "hold_threshold_ms": 500,
+                "is_modifier": false,
+                "modifier_name": null
+            },
+            "jump_to_preset_1": {
+                "pin": 24,
                 "pull": "up",
                 "edge": "falling",
                 "debounce_ms": 10,

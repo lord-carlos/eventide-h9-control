@@ -192,6 +192,11 @@ class DashboardWidget(QtWidgets.QWidget):
     connect_refresh_requested = QtCore.Signal()
     next_requested = QtCore.Signal()
     prev_requested = QtCore.Signal()
+    jump_to_preset_1_requested = QtCore.Signal()
+    jump_to_preset_2_requested = QtCore.Signal()
+    jump_to_preset_3_requested = QtCore.Signal()
+    jump_to_preset_4_requested = QtCore.Signal()
+    jump_to_preset_5_requested = QtCore.Signal()
     adjust_knob_requested = QtCore.Signal(str, int)
     adjust_knob_slot_requested = QtCore.Signal(int, int)  # slot_index, delta
     adjust_bpm_requested = QtCore.Signal(int)
@@ -397,6 +402,11 @@ class DashboardWidget(QtWidgets.QWidget):
             "adjust_knob_3_down": lambda: self.adjust_knob_slot_requested.emit(2, -1),
             "adjust_knob_4_up": lambda: self.adjust_knob_slot_requested.emit(3, +1),
             "adjust_knob_4_down": lambda: self.adjust_knob_slot_requested.emit(3, -1),
+            "jump_to_preset_1": lambda: self.jump_to_preset_1_requested.emit(),
+            "jump_to_preset_2": lambda: self.jump_to_preset_2_requested.emit(),
+            "jump_to_preset_3": lambda: self.jump_to_preset_3_requested.emit(),
+            "jump_to_preset_4": lambda: self.jump_to_preset_4_requested.emit(),
+            "jump_to_preset_5": lambda: self.jump_to_preset_5_requested.emit(),
         }
 
         # Get keyboard shortcuts from config or use empty dict if no config

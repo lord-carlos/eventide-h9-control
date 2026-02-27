@@ -12,6 +12,7 @@ from PySide6 import QtCore
 from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
+from h9control.app.preset_jump import PresetJump
 from h9control.domain.algorithms import H9FullAlgorithmData
 from h9control.domain.knob_display import (
     format_knob_value,
@@ -89,6 +90,11 @@ class H9DeviceWorker(QtCore.QObject):
     _gpio_connect_refresh_signal = QtCore.Signal()
     _gpio_sync_live_bpm_signal = QtCore.Signal()
     _gpio_adjust_bpm_signal = QtCore.Signal(int)
+    _gpio_jump_to_preset_1_signal = QtCore.Signal()
+    _gpio_jump_to_preset_2_signal = QtCore.Signal()
+    _gpio_jump_to_preset_3_signal = QtCore.Signal()
+    _gpio_jump_to_preset_4_signal = QtCore.Signal()
+    _gpio_jump_to_preset_5_signal = QtCore.Signal()
 
     def __init__(
         self,
@@ -156,6 +162,11 @@ class H9DeviceWorker(QtCore.QObject):
         self._gpio_connect_refresh_signal.connect(self.connect_or_refresh)
         self._gpio_sync_live_bpm_signal.connect(self.sync_live_bpm)
         self._gpio_adjust_bpm_signal.connect(self.adjust_bpm)
+        self._gpio_jump_to_preset_1_signal.connect(lambda: self.jump_to_preset(0))
+        self._gpio_jump_to_preset_2_signal.connect(lambda: self.jump_to_preset(1))
+        self._gpio_jump_to_preset_3_signal.connect(lambda: self.jump_to_preset(2))
+        self._gpio_jump_to_preset_4_signal.connect(lambda: self.jump_to_preset(3))
+        self._gpio_jump_to_preset_5_signal.connect(lambda: self.jump_to_preset(4))
 
     def _setup_gpio_bindings(self) -> None:
         """Load GPIO bindings from config and wire them to Qt signals.
@@ -197,6 +208,11 @@ class H9DeviceWorker(QtCore.QObject):
             "adjust_knob_4_down": lambda: self._gpio_adjust_knob_slot_signal.emit(
                 3, -1
             ),
+            "jump_to_preset_1": lambda: self._gpio_jump_to_preset_1_signal.emit(),
+            "jump_to_preset_2": lambda: self._gpio_jump_to_preset_2_signal.emit(),
+            "jump_to_preset_3": lambda: self._gpio_jump_to_preset_3_signal.emit(),
+            "jump_to_preset_4": lambda: self._gpio_jump_to_preset_4_signal.emit(),
+            "jump_to_preset_5": lambda: self._gpio_jump_to_preset_5_signal.emit(),
         }
 
         # Group actions by pin (tap vs hold variants)
@@ -354,6 +370,38 @@ class H9DeviceWorker(QtCore.QObject):
     @QtCore.Slot()
     def prev_preset(self) -> None:
         self._change_preset(delta=-1)
+
+    @QtCore.Slot(int)
+    def jump_to_preset(self, program: int) -> None:
+        if self._transport is None:
+            self._connect()
+        if self._transport is None:
+            return
+
+        try:
+            preset_jump = PresetJump(self._transport, self._midi_channel)
+            preset_jump.jump_to_preset(program)
+            self._current_program = program
+            time.sleep(0.3)
+            self._refresh_state()
+        except Exception as exc:
+            self._logger.exception("Preset jump failed")
+            prev = self._last_state
+            self._emit_state(
+                DashboardState(
+                    connected=prev.connected,
+                    status_text=f"Preset jump failed: {exc}",
+                    preset_number=prev.preset_number,
+                    preset_name=prev.preset_name,
+                    algorithm_name=prev.algorithm_name,
+                    algorithm_key=prev.algorithm_key,
+                    bpm=prev.bpm,
+                    knobs=prev.knobs,
+                    lock_delay=self._config.lock_delay,
+                    lock_feedback=self._config.lock_feedback,
+                    lock_pitch=self._config.lock_pitch,
+                )
+            )
 
     @QtCore.Slot(str, int)
     def adjust_knob(self, knob_name: str, delta: int) -> None:
@@ -770,7 +818,7 @@ class H9DeviceWorker(QtCore.QObject):
             )
 
     def _emit_state(self, state: DashboardState) -> None:
-        #self._logger.debug(f"_emit_state called: {state}")
+        # self._logger.debug(f"_emit_state called: {state}")
         # Always update live_bpm in state if available, and check for auto-sync
         if self._live_bpm is not None:
             state = dataclasses.replace(state, live_bpm=self._live_bpm)

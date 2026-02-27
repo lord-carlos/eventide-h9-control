@@ -65,6 +65,21 @@ def main() -> None:
     window.dashboard.prev_requested.connect(
         worker.prev_preset, QtCore.Qt.ConnectionType.QueuedConnection
     )
+    window.dashboard.jump_to_preset_1_requested.connect(
+        lambda: worker.jump_to_preset(0), QtCore.Qt.ConnectionType.QueuedConnection
+    )
+    window.dashboard.jump_to_preset_2_requested.connect(
+        lambda: worker.jump_to_preset(1), QtCore.Qt.ConnectionType.QueuedConnection
+    )
+    window.dashboard.jump_to_preset_3_requested.connect(
+        lambda: worker.jump_to_preset(2), QtCore.Qt.ConnectionType.QueuedConnection
+    )
+    window.dashboard.jump_to_preset_4_requested.connect(
+        lambda: worker.jump_to_preset(3), QtCore.Qt.ConnectionType.QueuedConnection
+    )
+    window.dashboard.jump_to_preset_5_requested.connect(
+        lambda: worker.jump_to_preset(4), QtCore.Qt.ConnectionType.QueuedConnection
+    )
 
     window.dashboard.adjust_knob_requested.connect(
         worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection
