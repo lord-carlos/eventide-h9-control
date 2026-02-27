@@ -30,16 +30,16 @@ sudo apt install -y \
     libgles2 \
     libwayland-client0 \
     libxkbcommon0 \
-    libglib2.0-0 \
     libfontconfig1 \
     libdbus-1-3 \
     libasound2-dev \
     libjack-jackd2-dev \
     portaudio19-dev \
     libsndfile1 \
-    libgpiod2 \
+    libgpiod3 \
     python3-dev \
-    gpiod
+    gpiod \
+    seatd
 
 # 3. Install uv (Python package manager)
 echo "[3/7] Installing uv..."
@@ -64,6 +64,11 @@ sudo -u $INSTALL_USER cat > "$INSTALL_HOME/.config/labwc/rc.xml" << 'EOF'
   <core>
     <gap>0</gap>
   </core>
+  <libinput>
+    <device name="11-005d Goodix Capacitive TouchScreen">
+      <calibrationMatrix>0 -1 1 1 0 0</calibrationMatrix>
+    </device>
+  </libinput>
   <!-- Screen rotation configuration -->
   <!-- Uncomment and adjust as needed for your display -->
   <!--
@@ -91,6 +96,8 @@ INSTALL_UID=$(id -u $INSTALL_USER)
 sudo sed -i "s|__PROJECT_DIR__|$PROJECT_DIR|g" /etc/systemd/system/h9-control.service
 sudo sed -i "s|__INSTALL_USER__|$INSTALL_USER|g" /etc/systemd/system/h9-control.service
 sudo sed -i "s|__INSTALL_UID__|$INSTALL_UID|g" /etc/systemd/system/h9-control.service
+
+sudo systemctl enable --now seatd
 
 sudo chmod +x "$PROJECT_DIR/linux/start-app.sh"
 sudo systemctl daemon-reload

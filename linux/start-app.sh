@@ -17,7 +17,7 @@ export WLR_RENDERER_ALLOW_SOFTWARE=1
 
 # Touch rotation calibration for rotated displays
 # Uncomment and adjust if your touchscreen needs rotation
-export WLR_LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0 0 0 1"  # For 90° rotation
+#export WLR_LIBINPUT_CALIBRATION_MATRIX="0 -1 1 1 0 0 0 0 1"  # For 90° rotation
 
 # Optional: Apply display rotation using wlr-randr
 # Uncomment and adjust output name and transform as needed

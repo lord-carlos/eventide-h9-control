@@ -1,7 +1,7 @@
 [Unit]
 Description=Eventide H9 Control UI
-After=user-runtime-dir@0.service dev-dri-card0.device network.target jack2.service
-Wants=user-runtime-dir@0.service dev-dri-card0.device
+After=seatd.service user-runtime-dir@1000.service dev-dri-card0.device network.target
+Wants=seatd.service user-runtime-dir@1000.service dev-dri-card0.device
 #Conflicts=zynthian.service zynthian-webconf.service 
 #jack2.service
 
