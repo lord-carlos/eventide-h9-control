@@ -20,4 +20,4 @@ Restart=always
 RestartSec=10
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
