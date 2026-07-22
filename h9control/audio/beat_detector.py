@@ -6,7 +6,6 @@ import logging
 import os
 import threading
 import time
-from typing import List
 
 import librosa
 import numpy as np
@@ -21,22 +20,19 @@ from h9control.app.config import ConfigManager
 # =============================================================================
 
 # Audio capture settings
-SAMPLE_RATE = 48000  # Lower = less CPU (22050 for Pi, 44100 for high accuracy)
+SAMPLE_RATE = 48000  # Capture rate; analysis runs at ANALYSIS_SAMPLE_RATE
 BUFFER_SIZE = 1024  # Buffer size per callback (samples)
 
-# Rolling buffer settings
-BUFFER_DURATION = 8.0  # Seconds of audio to keep in rolling buffer
+# Rolling buffer / analysis settings
+BUFFER_DURATION = 10.0  # Seconds of audio to keep in rolling buffer
+ANALYSIS_WINDOW = 8.0  # Seconds of audio analyzed per pass (~16 beats at 120 BPM)
 UPDATE_INTERVAL = 2.0  # Seconds between BPM recalculations
+ANALYSIS_SAMPLE_RATE = 22050  # librosa's native rate; no tempo information lost
 
 # Librosa beat_track parameters
 HOP_LENGTH = 256  # Hop length for onset detection (larger = faster, less accurate)
-START_BPM = 120.0  # Starting tempo estimate for beat tracking
-
-# Smoothing
-ENABLE_SMOOTHING = (
-    True  # Enable smoothing of BPM over time (exponential moving average)
-)
-SMOOTHING_ALPHA = 0.6  # Weight for new detection (0.0-1.0). Higher = more responsive.
+START_BPM = 120.0  # Initial tempo estimate for beat tracking
+TIGHTNESS = 100  # Beat tracker tightness (100=strict, 50=adaptive)
 
 # Onset strength parameters
 DETREND = False  # Detrend onset envelope (can help with some audio)
@@ -47,14 +43,21 @@ FMIN = 20.0  # Min frequency for mel spectrogram
 # Performance settings
 MONO_MODE = False  # Set to True to use only first channel (halves CPU/USB bandwidth)
 
-# BPM detection settings
-MIN_BPM = 80.0  # Minimum detectable BPM
-MAX_BPM = 180.0  # Maximum detectable BPM
-START_BPM = 120.0  # Initial tempo estimate
+# Silence handling
 SILENCE_THRESHOLD = 0.05  # Skip BPM calc when audio below this level
 HOLD_BPM_ON_SILENCE = True  # Keep last BPM during silence/breakdowns
-TIGHTNESS = 100  # Beat tracker tightness (100=strict, 50=adaptive)
-BUFFER_DURATION = 10.0  # Seconds of audio to analyze
+
+# Harmonic (octave) correction: raw readings are mapped into the configured
+# BPM range by scoring these tempo multiples against the onset autocorrelation,
+# weighted by a log-normal prior around the perceptual tempo center.
+HARMONIC_FACTORS = (0.5, 2 / 3, 0.75, 1.0, 4 / 3, 1.5, 2.0)
+PRIOR_CENTER_BPM = 120.0  # Perceptual tempo prior center
+PRIOR_STD_OCTAVES = 1.0  # Prior width in octaves
+
+# Stabilization
+SMOOTHING_ALPHA = 0.6  # EMA weight for new readings during fine tracking
+FINE_TRACK_TOLERANCE = 0.03  # <=3% deviation: fine tracking, else hold/switch
+SWITCH_CONFIRM_READINGS = 3  # Consecutive readings needed to confirm a tempo change
 
 
 class BeatDetector(QObject):
@@ -82,9 +85,14 @@ class BeatDetector(QObject):
         # Selected channels for beat detection
         self.selected_channels = self.config.audio_selected_channels
 
+        # Detectable BPM range (read from config on start)
+        self.min_bpm: float = 90.0
+        self.max_bpm: float = 150.0
+
         # Calculate buffer sizes
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
+        self.analysis_window_samples = int(ANALYSIS_WINDOW * self.sample_rate)
 
         # Ring buffer - lock-free circular buffer
         # Stores interleaved stereo samples or mono
@@ -100,11 +108,15 @@ class BeatDetector(QObject):
         # Analysis tracking
         self.last_read_total = 0  # Total samples read by analysis
 
-        # Current BPM value
+        # Current BPM value (stabilized)
         self.bpm: float = 0.0
+        self.last_raw_bpm: float = 0.0  # Last pre-stabilization reading (stale detection)
         self._last_calculated_bpm: float = 0.0  # Track previous BPM for stale detection
-        self.last_bpm_time: float = 0.0  # When BPM last changed
         self.same_bpm_count: int = 0  # Count of identical BPM readings
+
+        # Tempo change confirmation state (hysteresis)
+        self._pending_bpm: float | None = None  # Candidate tempo awaiting confirmation
+        self._pending_count: int = 0  # Consecutive readings agreeing with candidate
 
         # sounddevice setup
         self.stream: sd.InputStream | None = None
@@ -200,6 +212,15 @@ class BeatDetector(QObject):
         """Start the beat detection."""
         if self.running:
             return
+
+        # Read detectable BPM range from config (validated defensively)
+        self.min_bpm = float(self.config.audio_min_bpm)
+        self.max_bpm = float(self.config.audio_max_bpm)
+        if not 30.0 <= self.min_bpm < self.max_bpm <= 300.0:
+            logging.warning(
+                f"Invalid BPM range [{self.min_bpm}, {self.max_bpm}], using [90, 150]"
+            )
+            self.min_bpm, self.max_bpm = 90.0, 150.0
 
         self.running = True
         self._stop_event.clear()
@@ -319,6 +340,7 @@ class BeatDetector(QObject):
         """Recalculate buffer sizes based on current sample rate."""
         self.buffer_samples = int(BUFFER_DURATION * self.sample_rate)
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
+        self.analysis_window_samples = int(ANALYSIS_WINDOW * self.sample_rate)
 
         # Recreate ring buffer
         channels = 1 if self.mono_mode else 2
@@ -375,30 +397,35 @@ class BeatDetector(QObject):
                 continue
 
             # Check for new audio data
+            channels = 1 if self.mono_mode else 2
             samples_available = self.total_samples_written - self.last_read_total
-            samples_needed = self.update_samples * (1 if self.mono_mode else 2)
+            samples_needed = self.update_samples * channels
 
             if samples_available < samples_needed:
                 logging.debug(f"Not enough audio: {samples_available}/{samples_needed}")
                 continue
 
-            # Read from ring buffer
-            snapshot = self._read_ring_buffer(samples_needed)
+            # Read the full analysis window (newest audio), capped by the
+            # amount actually written so far
+            window_samples = min(
+                self.analysis_window_samples * channels, self.total_samples_written
+            )
+            snapshot = self._read_ring_buffer(window_samples)
             self.last_read_total = self.total_samples_written
 
             if snapshot is not None and len(snapshot) > 0:
                 self._calculate_bpm(snapshot)
 
-                # Check for stale BPM (same value repeated)
-                if self.bpm == self._last_calculated_bpm:
+                # Check for stale raw BPM (same value repeated)
+                if self.last_raw_bpm == self._last_calculated_bpm:
                     self.same_bpm_count += 1
                     if self.same_bpm_count >= 15:  # ~30 seconds
                         logging.warning(
-                            f"BPM appears stuck at {self.bpm} for {self.same_bpm_count * 2}s"
+                            f"BPM appears stuck at {self.last_raw_bpm} for {self.same_bpm_count * 2}s"
                         )
                 else:
                     self.same_bpm_count = 0
-                    self._last_calculated_bpm = self.bpm
+                    self._last_calculated_bpm = self.last_raw_bpm
 
     def _read_ring_buffer(self, sample_count: int) -> np.ndarray | None:
         """
@@ -562,23 +589,40 @@ class BeatDetector(QObject):
                     logging.debug("Buffer too quiet, skipping BPM calc")
                     return
 
+            # Resample to the analysis rate. Tempo is a ~2-3 Hz amplitude
+            # modulation and the onset analysis discards everything above
+            # FMAX anyway, so downsampling loses no tempo information.
+            if self.sample_rate != ANALYSIS_SAMPLE_RATE:
+                mono_audio = librosa.resample(
+                    mono_audio,
+                    orig_sr=self.sample_rate,
+                    target_sr=ANALYSIS_SAMPLE_RATE,
+                )
+            sr = ANALYSIS_SAMPLE_RATE
+
             # Calculate onset strength envelope
             onset_env = librosa.onset.onset_strength(
                 y=mono_audio,
-                sr=self.sample_rate,
+                sr=sr,
                 hop_length=HOP_LENGTH,
                 fmax=FMAX,
                 center=CENTER,
                 detrend=DETREND,
             )
 
-            # Adaptive starting BPM: if we have a valid previous reading, use it
-            current_start_bpm = self.bpm if self.bpm > 0 else START_BPM
+            # Anchor the tracker to the stabilized tempo, or to the pending
+            # candidate while a tempo change is being confirmed
+            if self._pending_bpm is not None:
+                current_start_bpm = self._pending_bpm
+            elif self.bpm > 0:
+                current_start_bpm = self.bpm
+            else:
+                current_start_bpm = START_BPM
 
             # Use beat_track to find beat locations
             tempo, beats = librosa.beat.beat_track(
                 onset_envelope=onset_env,
-                sr=self.sample_rate,
+                sr=sr,
                 hop_length=HOP_LENGTH,
                 start_bpm=current_start_bpm,
                 tightness=TIGHTNESS,
@@ -592,40 +636,147 @@ class BeatDetector(QObject):
             refined_beats = self._refine_beats(beats, onset_env)
 
             # Analyze beat timestamps for higher precision
-            beat_times = refined_beats * HOP_LENGTH / self.sample_rate
+            beat_times = refined_beats * HOP_LENGTH / sr
             ibis = np.diff(beat_times)
 
-            # Filter out unreasonable intervals (outside MIN_BPM-MAX_BPM range)
-            max_ibi = 60.0 / MIN_BPM
-            min_ibi = 60.0 / MAX_BPM
+            # Wide interval gate (half/double the configured range): harmonic
+            # errors are corrected below instead of being discarded here
+            max_ibi = 60.0 / (self.min_bpm / 2)
+            min_ibi = 60.0 / (self.max_bpm * 2)
             valid_ibis = ibis[(ibis > min_ibi) & (ibis < max_ibi)]
 
             if len(valid_ibis) == 0:
-                logging.warning(
-                    f"Beats outside valid BPM range, resetting to {START_BPM} BPM"
-                )
-                self.bpm = START_BPM
+                logging.debug("No usable beat intervals, holding previous BPM")
                 return
 
             # Cluster Averaging for precision
             raw_bpm = self._calculate_bpm_from_ibis(valid_ibis)
 
-            # Apply smoothing if enabled
-            if ENABLE_SMOOTHING and self.bpm > 0:
-                new_bpm = (self.bpm * (1 - SMOOTHING_ALPHA)) + (
-                    raw_bpm * SMOOTHING_ALPHA
-                )
-                self.bpm = round(new_bpm, 1)
-            else:
-                self.bpm = round(raw_bpm, 1)
+            # Correct octave/harmonic errors into the configured BPM range
+            corrected_bpm = self._correct_harmonics(raw_bpm, onset_env, sr)
+            self.last_raw_bpm = corrected_bpm
 
-            logging.debug(f"BPM detected: {self.bpm} (raw: {raw_bpm:.2f})")
-
-            # Emit signal for UI
-            self.bpm_detected.emit(self.bpm)
+            # Stabilize (EMA fine tracking + confirmed switching)
+            self._update_stabilized_bpm(corrected_bpm)
 
         except Exception as e:
             logging.error(f"Error calculating BPM: {e}")
+
+    def _correct_harmonics(
+        self, raw_bpm: float, onset_env: np.ndarray, sr: int
+    ) -> float:
+        """
+        Map a raw tempo reading into the configured BPM range by scoring
+        harmonic candidates (half, 2/3, 3/4, same, 4/3, 3/2, double) against
+        the onset envelope autocorrelation, weighted by a perceptual prior.
+
+        Fixes classic octave errors (e.g. 163 BPM detected for a 122 BPM song).
+        """
+        candidates = []
+        for factor in HARMONIC_FACTORS:
+            cand = raw_bpm * factor
+            if self.min_bpm <= cand <= self.max_bpm and all(
+                abs(cand - c) > 0.01 for c in candidates
+            ):
+                candidates.append(cand)
+
+        if not candidates:
+            return float(np.clip(raw_bpm, self.min_bpm, self.max_bpm))
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Normalized autocorrelation of the onset envelope
+        env = onset_env - np.mean(onset_env)
+        ac = np.correlate(env, env, mode="full")[len(env) - 1 :]
+        if len(ac) == 0 or ac[0] <= 0:
+            return float(np.clip(raw_bpm, self.min_bpm, self.max_bpm))
+        ac = ac / ac[0]
+
+        fps = sr / HOP_LENGTH
+
+        def ac_at_lag(lag: float) -> float:
+            """Autocorrelation at a fractional lag (linear interpolation)."""
+            lo = int(np.floor(lag))
+            if lo >= len(ac) - 1:
+                return 0.0
+            frac = lag - lo
+            return float(ac[lo] * (1.0 - frac) + ac[lo + 1] * frac)
+
+        best_bpm = candidates[0]
+        best_score = -1.0
+        for cand in candidates:
+            pulse = ac_at_lag(fps * 60.0 / cand)
+            prior = float(
+                np.exp(
+                    -0.5
+                    * (np.log2(cand / PRIOR_CENTER_BPM) / PRIOR_STD_OCTAVES) ** 2
+                )
+            )
+            score = pulse * prior
+            logging.debug(
+                f"  harmonic candidate {cand:6.1f} BPM: pulse={pulse:.3f} "
+                f"prior={prior:.3f} score={score:.3f}"
+            )
+            if score > best_score:
+                best_score = score
+                best_bpm = cand
+
+        if abs(best_bpm - raw_bpm) > 0.5:
+            logging.debug(f"Harmonic correction: {raw_bpm:.1f} -> {best_bpm:.1f} BPM")
+
+        return best_bpm
+
+    def _update_stabilized_bpm(self, new_bpm: float) -> None:
+        """
+        Update the reported BPM with hysteresis.
+
+        Small deviations (<=3%) are fine-tracked with an EMA. Larger deviations
+        must repeat for SWITCH_CONFIRM_READINGS consecutive passes (~4-6s)
+        before the tempo switches, preventing jumps from single bad readings.
+        """
+        # First lock
+        if self.bpm <= 0:
+            self.bpm = round(new_bpm, 1)
+            self._pending_bpm = None
+            self._pending_count = 0
+            logging.debug(f"BPM locked: {self.bpm}")
+            self.bpm_detected.emit(self.bpm)
+            return
+
+        deviation = abs(new_bpm - self.bpm) / self.bpm
+
+        if deviation <= FINE_TRACK_TOLERANCE:
+            # Fine tracking
+            self.bpm = round(
+                self.bpm * (1 - SMOOTHING_ALPHA) + new_bpm * SMOOTHING_ALPHA, 1
+            )
+            self._pending_bpm = None
+            self._pending_count = 0
+            logging.debug(f"BPM fine-tracked: {self.bpm}")
+            self.bpm_detected.emit(self.bpm)
+            return
+
+        # Large deviation: count consecutive agreeing readings before switching
+        if self._pending_bpm is not None and (
+            abs(new_bpm - self._pending_bpm) / self._pending_bpm
+            <= FINE_TRACK_TOLERANCE
+        ):
+            self._pending_count += 1
+        else:
+            self._pending_bpm = new_bpm
+            self._pending_count = 1
+
+        if self._pending_count >= SWITCH_CONFIRM_READINGS:
+            logging.info(f"BPM change confirmed: {self.bpm} -> {new_bpm:.1f}")
+            self.bpm = round(new_bpm, 1)
+            self._pending_bpm = None
+            self._pending_count = 0
+            self.bpm_detected.emit(self.bpm)
+        else:
+            logging.debug(
+                f"Holding {self.bpm} BPM (candidate {new_bpm:.1f}, "
+                f"{self._pending_count}/{SWITCH_CONFIRM_READINGS})"
+            )
 
     def _refine_beats(self, beats: np.ndarray, onset_env: np.ndarray) -> np.ndarray:
         """Refine beat locations using parabolic interpolation for sub-frame accuracy."""

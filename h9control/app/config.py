@@ -12,6 +12,8 @@ class AudioConfig:
     input_channels: int = 1
     auto_bpm_mode: str = "manual"  # "manual" or "continuous"
     selected_channels: list[int] = field(default_factory=lambda: [0, 1])
+    min_bpm: float = 90.0  # Minimum detectable BPM for beat detection
+    max_bpm: float = 150.0  # Maximum detectable BPM for beat detection
 
 
 @dataclass
@@ -114,6 +116,8 @@ class ConfigManager:
                     input_channels=audio_data.get("input_channels", 1),
                     auto_bpm_mode=audio_data.get("auto_bpm_mode", "manual"),
                     selected_channels=audio_data.get("selected_channels", [0, 1]),
+                    min_bpm=audio_data.get("min_bpm", 90.0),
+                    max_bpm=audio_data.get("max_bpm", 150.0),
                 )
 
                 shortcuts_data = data.get("shortcuts", {})
@@ -216,6 +220,24 @@ class ConfigManager:
     @audio_selected_channels.setter
     def audio_selected_channels(self, value: list[int]) -> None:
         self.config.audio.selected_channels = value
+        self.save()
+
+    @property
+    def audio_min_bpm(self) -> float:
+        return self.config.audio.min_bpm
+
+    @audio_min_bpm.setter
+    def audio_min_bpm(self, value: float) -> None:
+        self.config.audio.min_bpm = value
+        self.save()
+
+    @property
+    def audio_max_bpm(self) -> float:
+        return self.config.audio.max_bpm
+
+    @audio_max_bpm.setter
+    def audio_max_bpm(self, value: float) -> None:
+        self.config.audio.max_bpm = value
         self.save()
 
     @property

@@ -251,6 +251,35 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_bpm.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_bpm, bpm_layout)
 
+        # BPM Detection Range (min/max)
+        self._bpm_min_spin = QtWidgets.QSpinBox()
+        self._bpm_min_spin.setRange(40, 240)
+        self._bpm_min_spin.setSingleStep(5)
+        self._bpm_min_spin.setMinimumHeight(RADIO_BUTTON_MIN_HEIGHT)
+        self._bpm_min_spin.setMinimumWidth(120)
+        self._bpm_min_spin.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._bpm_min_spin.valueChanged.connect(self._on_bpm_range_changed)
+
+        self._bpm_max_spin = QtWidgets.QSpinBox()
+        self._bpm_max_spin.setRange(40, 240)
+        self._bpm_max_spin.setSingleStep(5)
+        self._bpm_max_spin.setMinimumHeight(RADIO_BUTTON_MIN_HEIGHT)
+        self._bpm_max_spin.setMinimumWidth(120)
+        self._bpm_max_spin.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._bpm_max_spin.valueChanged.connect(self._on_bpm_range_changed)
+
+        bpm_range_layout = QtWidgets.QHBoxLayout()
+        bpm_range_layout.addWidget(self._bpm_min_spin)
+        lbl_bpm_dash = QtWidgets.QLabel("-")
+        lbl_bpm_dash.setFont(QtGui.QFont("Arial", 14))
+        bpm_range_layout.addWidget(lbl_bpm_dash)
+        bpm_range_layout.addWidget(self._bpm_max_spin)
+        bpm_range_layout.addStretch()
+
+        lbl_bpm_range = QtWidgets.QLabel("BPM Range:")
+        lbl_bpm_range.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow(lbl_bpm_range, bpm_range_layout)
+
         # Lock Delay Checkbox
         self._lock_delay_checkbox = QtWidgets.QCheckBox("Lock Delay A/B Together")
         self._lock_delay_checkbox.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
@@ -445,6 +474,14 @@ class SettingsWidget(QtWidgets.QWidget):
         else:
             self._bpm_mode_manual.setChecked(True)
 
+        # BPM Range (block signals to avoid saving/restarting during load)
+        self._bpm_min_spin.blockSignals(True)
+        self._bpm_max_spin.blockSignals(True)
+        self._bpm_min_spin.setValue(int(self.config.audio_min_bpm))
+        self._bpm_max_spin.setValue(int(self.config.audio_max_bpm))
+        self._bpm_min_spin.blockSignals(False)
+        self._bpm_max_spin.blockSignals(False)
+
         # Lock settings
         self._lock_delay_checkbox.setChecked(self.config.lock_delay)
         self._lock_feedback_checkbox.setChecked(self.config.lock_feedback)
@@ -509,6 +546,30 @@ class SettingsWidget(QtWidgets.QWidget):
         else:
             self.config.auto_bpm_mode = "manual"
         logging.info(f"BPM mode changed to: {self.config.auto_bpm_mode}")
+
+    def _on_bpm_range_changed(self) -> None:
+        """Save BPM detection range, keeping min < max."""
+        min_bpm = self._bpm_min_spin.value()
+        max_bpm = self._bpm_max_spin.value()
+
+        if min_bpm >= max_bpm:
+            # Push the counterpart out (without re-triggering this handler)
+            sender = self.sender()
+            if sender is self._bpm_min_spin:
+                max_bpm = min(min_bpm + 10, 240)
+                self._bpm_max_spin.blockSignals(True)
+                self._bpm_max_spin.setValue(max_bpm)
+                self._bpm_max_spin.blockSignals(False)
+            else:
+                min_bpm = max(max_bpm - 10, 40)
+                self._bpm_min_spin.blockSignals(True)
+                self._bpm_min_spin.setValue(min_bpm)
+                self._bpm_min_spin.blockSignals(False)
+
+        self.config.audio_min_bpm = float(min_bpm)
+        self.config.audio_max_bpm = float(max_bpm)
+        logging.info(f"BPM range changed to: {min_bpm} - {max_bpm}")
+        self.audio_settings_changed.emit()
 
     def _on_channel_changed(self) -> None:
         """Save selected channels when either channel combo changes."""
