@@ -53,6 +53,17 @@ HOLD_BPM_ON_SILENCE = True  # Keep last BPM during silence/breakdowns
 HARMONIC_FACTORS = (0.5, 2 / 3, 0.75, 1.0, 4 / 3, 1.5, 2.0)
 PRIOR_CENTER_BPM = 120.0  # Perceptual tempo prior center
 PRIOR_STD_OCTAVES = 1.0  # Prior width in octaves
+# Comb scoring: autocorrelation weights at 1x-4x each candidate's beat period,
+# so a true 4/4 tempo also collects energy at the 2-beat and bar level, while
+# spurious fractional periodicities (e.g. 3-eighth-note accents) only hit some.
+COMB_WEIGHTS = (1.0, 0.5, 1 / 3, 0.25)
+# Plain octave corrections are trusted fully; triplet-based factors (2/3, 3/4,
+# 4/3, 3/2) must win with slightly stronger evidence (most music is 4/4).
+# Keep this light: the penalty also applies when ESCAPING a wrong triplet
+# lock (e.g. tracker stuck at 92 BPM on a true 138 BPM song), so a strong
+# penalty defeats itself. The comb sum is the primary 4/4 discriminator.
+OCTAVE_FACTORS = (0.5, 1.0, 2.0)
+TRIPLET_FACTOR_PENALTY = 0.95
 
 # Stabilization
 SMOOTHING_ALPHA = 0.6  # EMA weight for new readings during fine tracking
@@ -668,22 +679,28 @@ class BeatDetector(QObject):
         """
         Map a raw tempo reading into the configured BPM range by scoring
         harmonic candidates (half, 2/3, 3/4, same, 4/3, 3/2, double) against
-        the onset envelope autocorrelation, weighted by a perceptual prior.
+        the onset envelope autocorrelation.
 
-        Fixes classic octave errors (e.g. 163 BPM detected for a 122 BPM song).
+        Each candidate is scored with a comb sum (autocorrelation at 1x-4x its
+        beat period, so a true 4/4 tempo also collects energy at the 2-beat and
+        bar level), a log-normal perceptual prior, and a penalty for
+        triplet-based factors.
+
+        Fixes classic octave errors (e.g. 163 BPM detected for a 122 BPM song,
+        or 92 BPM for a 138 BPM song with a 3-eighth-note accent pattern).
         """
-        candidates = []
+        candidates: list[tuple[float, float]] = []  # (bpm, factor)
         for factor in HARMONIC_FACTORS:
             cand = raw_bpm * factor
             if self.min_bpm <= cand <= self.max_bpm and all(
-                abs(cand - c) > 0.01 for c in candidates
+                abs(cand - c) > 0.01 for c, _ in candidates
             ):
-                candidates.append(cand)
+                candidates.append((cand, factor))
 
         if not candidates:
             return float(np.clip(raw_bpm, self.min_bpm, self.max_bpm))
         if len(candidates) == 1:
-            return candidates[0]
+            return candidates[0][0]
 
         # Normalized autocorrelation of the onset envelope
         env = onset_env - np.mean(onset_env)
@@ -702,20 +719,29 @@ class BeatDetector(QObject):
             frac = lag - lo
             return float(ac[lo] * (1.0 - frac) + ac[lo + 1] * frac)
 
-        best_bpm = candidates[0]
+        def comb_pulse(bpm: float) -> float:
+            """Weighted autocorrelation sum at 1x-4x the beat period."""
+            lag = fps * 60.0 / bpm
+            return float(
+                sum(w * ac_at_lag(k * lag) for k, w in enumerate(COMB_WEIGHTS, 1))
+            )
+
+        best_bpm = candidates[0][0]
         best_score = -1.0
-        for cand in candidates:
-            pulse = ac_at_lag(fps * 60.0 / cand)
+        for cand, factor in candidates:
+            pulse = comb_pulse(cand)
             prior = float(
                 np.exp(
                     -0.5
                     * (np.log2(cand / PRIOR_CENTER_BPM) / PRIOR_STD_OCTAVES) ** 2
                 )
             )
-            score = pulse * prior
+            factor_weight = 1.0 if factor in OCTAVE_FACTORS else TRIPLET_FACTOR_PENALTY
+            score = pulse * prior * factor_weight
             logging.debug(
-                f"  harmonic candidate {cand:6.1f} BPM: pulse={pulse:.3f} "
-                f"prior={prior:.3f} score={score:.3f}"
+                f"  harmonic candidate {cand:6.1f} BPM (x{factor:.2f}): "
+                f"pulse={pulse:.3f} prior={prior:.3f} fw={factor_weight:.2f} "
+                f"score={score:.3f}"
             )
             if score > best_score:
                 best_score = score
