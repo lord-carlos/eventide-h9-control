@@ -199,9 +199,19 @@ class SettingsWidget(QtWidgets.QWidget):
         self._populate_devices()
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
 
+        self._btn_refresh_devices = QtWidgets.QPushButton("Refresh")
+        self._btn_refresh_devices.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
+        self._btn_refresh_devices.setMinimumWidth(120)
+        self._btn_refresh_devices.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._btn_refresh_devices.clicked.connect(self.refresh_devices)
+
+        device_row = QtWidgets.QHBoxLayout()
+        device_row.addWidget(self._device_combo, stretch=1)
+        device_row.addWidget(self._btn_refresh_devices)
+
         lbl_device = QtWidgets.QLabel("Audio Input Device:")
         lbl_device.setFont(QtGui.QFont("Arial", 14))
-        form_layout.addRow(lbl_device, self._device_combo)
+        form_layout.addRow(lbl_device, device_row)
 
         # Channel Selection - Left Channel
         self._channel_left_combo = QtWidgets.QComboBox()
@@ -421,7 +431,8 @@ class SettingsWidget(QtWidgets.QWidget):
             self._channel_left_combo.blockSignals(False)
             self._channel_right_combo.blockSignals(False)
 
-    def _load_settings(self) -> None:
+    def _restore_audio_selection(self) -> None:
+        """Restore the saved device/channel selection into the combo boxes."""
         # Audio Device - restore saved device if it exists
         current_device_id = self.config.audio_input_device_id
         if current_device_id is not None:
@@ -466,6 +477,48 @@ class SettingsWidget(QtWidgets.QWidget):
             )
             if right_idx >= 0:
                 self._channel_right_combo.setCurrentIndex(right_idx)
+
+    def refresh_devices(self) -> None:
+        """Re-query audio devices and restore the current selection.
+
+        Sounddevice indices can shift when devices are hotplugged, so the
+        previous selection is matched by name first, then by index.
+        """
+        prev_name = self._device_combo.currentText()
+        prev_id = self._device_combo.currentData()
+
+        self._device_combo.blockSignals(True)
+        if self._channel_left_combo:
+            self._channel_left_combo.blockSignals(True)
+        if self._channel_right_combo:
+            self._channel_right_combo.blockSignals(True)
+
+        try:
+            self._populate_devices()
+
+            new_index = self._device_combo.findText(prev_name) if prev_name else -1
+            if new_index < 0 and prev_id is not None:
+                new_index = self._device_combo.findData(prev_id)
+            if new_index >= 0:
+                self._device_combo.setCurrentIndex(new_index)
+
+            self._restore_audio_selection()
+        finally:
+            self._device_combo.blockSignals(False)
+            if self._channel_left_combo:
+                self._channel_left_combo.blockSignals(False)
+            if self._channel_right_combo:
+                self._channel_right_combo.blockSignals(False)
+
+        selected_id = self._device_combo.currentData()
+        if selected_id != prev_id:
+            logging.info(
+                f"Audio device changed from {prev_id} to {selected_id} after refresh"
+            )
+            self.audio_settings_changed.emit()
+
+    def _load_settings(self) -> None:
+        self._restore_audio_selection()
 
         # BPM Mode
         mode = self.config.auto_bpm_mode
