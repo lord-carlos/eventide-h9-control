@@ -138,13 +138,18 @@ def parse_preset_dump_text(raw_text: str) -> PresetSnapshot:
             # Sometimes dumps include only the algorithm name (no user preset name).
             # Example: "BLACKHOLE" where our internal key is "BKHOLE".
             only_line = trailing[0]
-            if H9FullAlgorithmData.resolve_key_from_display_name(only_line) is not None:
+            if (
+                H9FullAlgorithmData.resolve_key_from_display_name(only_line, category)
+                is not None
+            ):
                 algorithm_name = only_line
             else:
                 preset_name = only_line
 
     if algorithm_name is not None:
-        algorithm_key = H9FullAlgorithmData.resolve_key_from_display_name(algorithm_name)
+        algorithm_key = H9FullAlgorithmData.resolve_key_from_display_name(
+            algorithm_name, category
+        )
 
     # Fallback: if the dump omitted the algorithm display name, try numeric mapping.
     if algorithm_key is None:

@@ -43,7 +43,7 @@ class H9FullAlgorithmData:
                 "FLANGE", 
                 "M-FLTR", 
                 "ROTARY", 
-                "TREMLO", 
+                "TREMLO_MOD",
                 "VIBE", 
                 "UNDLTR", 
                 "RINGMD"
@@ -65,7 +65,7 @@ class H9FullAlgorithmData:
                 "MODEKO",
                 "BKHOLE",
                 "MANGLD",
-                "TREMLO",
+                "TREMLO_SPC",
                 "DYNAVB",
                 "SHIMMR",
             ],
@@ -114,7 +114,7 @@ class H9FullAlgorithmData:
             display_names=["ROTARY"],
             knobs=["MODSRC", "RATE", "S-MOD", "D-MOD", "TONE", "BALNCE", "HRNSPD", "RTRSPD", "SIZE", "INTENS"],
         ),
-        "TREMLO": AlgorithmMeta(
+        "TREMLO_MOD": AlgorithmMeta(
             description="Modulates the level of the incoming audio with an LFO.",
             display_names=["TREMLO", "TREMOLOPAN"],
             knobs=["MODSRC", "RATE", "S-MOD", "D-MOD", "WIDTH", "SHAPE", "SPEED", "DEPTH", "TYPE", "INTENS"],
@@ -221,7 +221,7 @@ class H9FullAlgorithmData:
             display_names=["MANGLD", "MANGLEDVERB"],
             knobs=["MIDLVL", "WOBBLE", "OUTPUT", "ODRIVE", "HI-LVL", "LO-LVL", "PREDLY", "SIZE", "DECAY", "MIX"],
         ),
-        "TREMLO": AlgorithmMeta(
+        "TREMLO_SPC": AlgorithmMeta(
             description="Large reverb cut by an aggressive rhythmic tremolo.",
             display_names=["TREMLO", "TREMOLOVERB"],
             knobs=["HIFREQ", "STDPTH", "SPEED", "SHAPE", "HI-LVL", "LO-LVL", "PREDLY", "SIZE", "DECAY", "MIX"],
@@ -350,7 +350,9 @@ class H9FullAlgorithmData:
         return list(meta.knobs) if meta is not None else []
 
     @classmethod
-    def resolve_key_from_display_name(cls, display_name: str) -> str | None:
+    def resolve_key_from_display_name(
+        cls, display_name: str, category: int | None = None
+    ) -> str | None:
         """Best-effort mapping from dump algorithm display name -> algorithm key."""
 
         name = display_name.strip().upper()
@@ -361,16 +363,31 @@ class H9FullAlgorithmData:
             return name
 
         wanted = re.sub(r"[^A-Z0-9]", "", name)
-        for key, info in cls.ALGO_MAP.items():
+        if category is None:
+            candidate_keys = list(cls.ALGO_MAP)
+        else:
+            category_info = cls.CATEGORIES.get(category)
+            if category_info is None:
+                return None
+            candidate_keys = category_info.keys
+
+        matches: list[str] = []
+        for key in candidate_keys:
+            info = cls.ALGO_MAP.get(key)
+            if info is None:
+                continue
+
             if re.sub(r"[^A-Z0-9]", "", key.upper()) == wanted:
-                return key
+                matches.append(key)
+                continue
 
             for disp in info.display_names:
                 disp_norm = re.sub(r"[^A-Z0-9]", "", disp.upper())
                 if disp_norm == wanted:
-                    return key
+                    matches.append(key)
+                    break
 
-        return None
+        return matches[0] if len(matches) == 1 else None
 
     @classmethod
     def resolve_key_from_category_index(cls, category: int | None, effect_index: int | None) -> str | None:
