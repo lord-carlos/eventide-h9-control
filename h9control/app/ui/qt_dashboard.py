@@ -17,10 +17,12 @@ _DASHBOARD_SIZE = QtCore.QSize(1280, 720)
 
 # Typography (point sizes)
 _FONT_SIZE_TITLE = 42  # Preset name
-_FONT_SIZE_SUBTITLE = 17  # Algorithm and knob labels
-_FONT_SIZE_KNOB_VALUE = 21  # Human-readable knob values
+_FONT_SIZE_SUBTITLE = 20  # Algorithm and knob labels
+_FONT_SIZE_KNOB_LABEL = 30  # Parameter names
+_FONT_SIZE_KNOB_VALUE = 36  # Human-readable knob values
+_FONT_SIZE_KNOB_BADGE = 20  # Parameter lock badges
 _FONT_SIZE_VALUE = 24  # BPM numbers
-_FONT_SIZE_LABEL = 12  # Metric labels
+_FONT_SIZE_LABEL = 14  # Metric labels and lock badges
 _FONT_SIZE_RAW_VALUE = 9  # Raw value retained for tooltips/debugging
 _FONT_SIZE_BUTTON = 16  # Button labels
 _FONT_SIZE_STATUS = 13  # Connection status
@@ -29,17 +31,17 @@ _FONT_SIZE_STATUS = 13  # Connection status
 _ROOT_MARGIN = 24  # Outer margin around entire dashboard
 _SECTION_SPACING = 14  # Vertical spacing between sections
 _KNOB_GROUP_SPACING = 28  # Horizontal spacing between DLY-A/B and FBK-A/B
-_KNOB_INTERNAL_SPACING = 6  # Vertical spacing inside a knob meter
+_KNOB_INTERNAL_SPACING = 8  # Vertical spacing inside a knob meter
 
 # Layout stretch factors (vertical proportions)
-_STRETCH_TOP = 0  # Top section (DLY knobs)
-_STRETCH_CENTER = 1  # Center section (preset/algorithm)
-_STRETCH_BOTTOM = 0  # Bottom section (FBK knobs + BPM)
+_STRETCH_TOP = 1  # Top section (DLY knobs)
+_STRETCH_CENTER = 2  # Center section (preset/algorithm)
+_STRETCH_BOTTOM = 1  # Bottom section (FBK knobs + BPM)
 _STRETCH_CENTER_TEXT_TOP = 1  # Stretch above preset name
 _STRETCH_CENTER_TEXT_BOTTOM = 1  # Stretch below algorithm
 
 # Widget dimensions
-_PROGRESS_BAR_HEIGHT = 16  # Progress bar thickness
+_PROGRESS_BAR_HEIGHT = 26  # Progress bar thickness
 _BUTTON_PREV_NEXT_WIDTH = 116  # Width of previous/next buttons
 _BUTTON_PREV_NEXT_HEIGHT = 144  # Height of previous/next buttons
 _BUTTON_BPM_WIDTH = 170  # Width of BPM metric buttons
@@ -52,7 +54,9 @@ _HEADER_HEIGHT = _BUTTON_BPM_HEIGHT  # Connection, BPM, and navigation status ro
 class _Fonts:
     title: QtGui.QFont  # Preset name
     subtitle: QtGui.QFont  # Algorithm, knob labels
+    knob_label: QtGui.QFont  # Parameter names
     knob_value: QtGui.QFont  # Human-readable knob values
+    knob_badge: QtGui.QFont  # Parameter lock badges
     value: QtGui.QFont  # BPM/Live numbers
     label: QtGui.QFont  # "BPM"/"Live" text
     raw_value: QtGui.QFont  # Raw value retained for tooltips/debugging
@@ -69,9 +73,17 @@ def _make_fonts() -> _Fonts:
     subtitle.setPointSize(_FONT_SIZE_SUBTITLE)
     subtitle.setBold(True)
 
+    knob_label = QtGui.QFont()
+    knob_label.setPointSize(_FONT_SIZE_KNOB_LABEL)
+    knob_label.setBold(True)
+
     knob_value = QtGui.QFont()
     knob_value.setPointSize(_FONT_SIZE_KNOB_VALUE)
     knob_value.setBold(True)
+
+    knob_badge = QtGui.QFont()
+    knob_badge.setPointSize(_FONT_SIZE_KNOB_BADGE)
+    knob_badge.setBold(True)
 
     value = QtGui.QFont()
     value.setPointSize(_FONT_SIZE_VALUE)
@@ -96,7 +108,9 @@ def _make_fonts() -> _Fonts:
     return _Fonts(
         title=title,
         subtitle=subtitle,
+        knob_label=knob_label,
         knob_value=knob_value,
+        knob_badge=knob_badge,
         value=value,
         label=label,
         raw_value=raw_value,
@@ -110,7 +124,7 @@ class _LabeledProgress(QtWidgets.QWidget):
         super().__init__(parent)
 
         self._label = QtWidgets.QLabel("—")
-        self._label.setFont(fonts.subtitle)
+        self._label.setFont(fonts.knob_label)
 
         self._value = QtWidgets.QLabel("—")
         self._value.setFont(fonts.knob_value)
@@ -118,7 +132,7 @@ class _LabeledProgress(QtWidgets.QWidget):
 
         self._lock_badge = QtWidgets.QLabel("LOCKED")
         self._lock_badge.setObjectName("lock-badge")
-        self._lock_badge.setFont(fonts.label)
+        self._lock_badge.setFont(fonts.knob_badge)
         self._lock_badge.setStyleSheet("color: #d7a74a;")
         self._lock_badge.setVisible(False)
 
@@ -145,10 +159,16 @@ class _LabeledProgress(QtWidgets.QWidget):
         value_row = QtWidgets.QHBoxLayout()
         value_row.setContentsMargins(0, 0, 0, 0)
         value_row.setSpacing(8)
-        value_row.addWidget(self._label)
+        value_row.addWidget(
+            self._label, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         value_row.addStretch(1)
-        value_row.addWidget(self._value)
-        value_row.addWidget(self._lock_badge)
+        value_row.addWidget(
+            self._value, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        value_row.addWidget(
+            self._lock_badge, alignment=QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         layout.addLayout(value_row)
         layout.addWidget(self._bar)
         layout.addWidget(self._raw_value)
