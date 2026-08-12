@@ -26,8 +26,15 @@ h9-control-cli = "main:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = ["--cov=h9control", "--cov-report=term-missing:skip-covered"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 40
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
 ]

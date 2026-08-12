@@ -10,14 +10,14 @@ from pathlib import Path
 class BacklightController:
     """Simple backlight controller for Linux."""
 
-    def __init__(self) -> None:
+    def __init__(self, sysfs_root: Path = Path("/sys/class/backlight")) -> None:
         self.device_path: Path | None = None
         self.max_brightness: int = 100
-        self._detect_device()
+        self._detect_device(sysfs_root)
 
-    def _detect_device(self) -> None:
+    def _detect_device(self, sysfs_root: Path) -> None:
         """Detect first available backlight device."""
-        backlight_dir = Path("/sys/class/backlight")
+        backlight_dir = sysfs_root
         if not backlight_dir.exists():
             return
 

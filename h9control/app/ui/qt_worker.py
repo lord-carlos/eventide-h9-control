@@ -53,8 +53,9 @@ class _FrameWaiter:
 
 
 class _PresetChangeDetector:
-    def __init__(self) -> None:
+    def __init__(self, now: Callable[[], float] | None = None) -> None:
         self._recent_prefixes: deque[tuple[float, bytes]] = deque()
+        self._now = now if now is not None else time.monotonic
 
     def observe(self, frame: SysexFrame) -> bool:
         if frame.command != 0x60:
@@ -67,7 +68,7 @@ class _PresetChangeDetector:
         if len(frame.payload) < 3:
             return False
 
-        now = time.monotonic()
+        now = self._now()
         prefix = bytes(frame.payload[0:3])
         self._recent_prefixes.append((now, prefix))
 

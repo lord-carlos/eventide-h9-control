@@ -175,6 +175,16 @@ class H9FullAlgorithmData:
             display_names=["CRYSTL", "CRYSTALS"],
             knobs=["FBK-B", "FBK-A", "VRB-DC", "VRB-MX", "RDLY-B", "RDLY-A", "PICH-B", "PICH-A", "PICHMX", "MIX"],
         ),
+        "HARPEG": AlgorithmMeta(
+            description="Dual 16-step arpeggiators combining pitch, rhythm, and effect sequences.",
+            display_names=["HARPEG", "HARPEGGIATOR"],
+            knobs=["MIX", "ARP-MX", "SQNC-A", "SQNC-B", "RYTH-A", "RYTH-B", "DYNAM", "LENGTH", "FX-A", "FX-B"],
+        ),
+        "SYNTH": AlgorithmMeta(
+            description="Tracks the pitch of the input and generates a synthesized tone with additive and subtractive voices.",
+            display_names=["SYNTH", "SYNTHONIZER"],
+            knobs=["MIX", "VOX-MX", "WVE-MX", "OCTVES", "ATTK-A", "ATTK-B", "VRBLVL", "VRBDCY", "SHAPE", "SWEEP"],
+        ),
         # --- SPACE (Category 4) ---
         "HALL": AlgorithmMeta(
             description="Simulates large enclosed spaces with a 3-band crossover reverb network.",
