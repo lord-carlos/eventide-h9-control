@@ -532,10 +532,6 @@ class DashboardWidget(QtWidgets.QWidget):
                 border-radius: 7px;
                 padding: 6px;
             }
-            QPushButton#settings-button:hover, QPushButton#nav-button:hover,
-            QPushButton#metric-button:hover {
-                border-color: palette(highlight);
-            }
             QPushButton#settings-button:pressed, QPushButton#nav-button:pressed,
             QPushButton#metric-button:pressed {
                 background-color: palette(highlight);

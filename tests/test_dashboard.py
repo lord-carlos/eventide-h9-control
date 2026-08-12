@@ -67,6 +67,18 @@ def test_dashboard_actions_remain_touchable() -> None:
     app.processEvents()
 
 
+def test_dashboard_buttons_only_highlight_while_pressed() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    widget = DashboardWidget()
+
+    stylesheet = widget.styleSheet()
+
+    assert ":hover" not in stylesheet
+    assert ":pressed" in stylesheet
+    widget.deleteLater()
+    app.processEvents()
+
+
 def test_dashboard_marks_locked_secondary_knobs() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     widget = DashboardWidget()
