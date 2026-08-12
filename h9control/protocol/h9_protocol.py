@@ -7,7 +7,7 @@ import re
 from h9control.domain.preset import PresetSnapshot, parse_preset_dump_text
 from h9control.protocol.codes import H9SysexCodes, H9SystemKeys
 from h9control.protocol.sysex import SysexFrame, build_eventide_sysex, decode_eventide_sysex
-from h9control.transport.midi_transport import MidiTransport
+from h9control.transport.midi_transport import H9Transport
 
 
 class H9Protocol:
@@ -26,7 +26,7 @@ class H9Protocol:
     SYSEXC_VALUE_WANT = H9SysexCodes.SYSEXC_VALUE_WANT
     SYSEXC_VALUE_DUMP = H9SysexCodes.SYSEXC_VALUE_DUMP
 
-    def __init__(self, transport: MidiTransport, *, device_id: int = 1) -> None:
+    def __init__(self, transport: H9Transport, *, device_id: int = 1) -> None:
         self._transport = transport
         self.device_id = device_id
 

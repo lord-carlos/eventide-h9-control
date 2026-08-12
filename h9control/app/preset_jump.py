@@ -5,7 +5,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from h9control.transport.midi_transport import MidiTransport
+    from h9control.transport.midi_transport import H9Transport
 
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class PresetJump:
     """Handles jumping to specific presets via MIDI Program Change."""
 
-    def __init__(self, transport: MidiTransport, midi_channel: int = 0) -> None:
+    def __init__(self, transport: H9Transport, midi_channel: int = 0) -> None:
         self._transport = transport
         self._midi_channel = midi_channel
 

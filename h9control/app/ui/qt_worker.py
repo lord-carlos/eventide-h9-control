@@ -26,8 +26,9 @@ from h9control.protocol.sysex import (
     build_eventide_sysex,
     decode_eventide_sysex,
 )
-from h9control.transport.midi_transport import MidiTransport
+from h9control.transport.midi_transport import H9Transport, MidiTransport
 from h9control.transport.gpio_input import GpioInputManager
+from h9control.transport.simulated_h9 import SimulatedH9Transport
 from midi import H9Midi
 
 
@@ -103,6 +104,9 @@ class H9DeviceWorker(QtCore.QObject):
         device_prefix: str = "H9 Pedal",
         device_id: int = 1,
         midi_channel: int = 0,
+        simulate_h9: bool = False,
+        simulate_preset: int = 0,
+        enable_gpio: bool = True,
     ) -> None:
         super().__init__()
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -111,9 +115,12 @@ class H9DeviceWorker(QtCore.QObject):
         self._device_prefix = device_prefix
         self._device_id = device_id
         self._midi_channel = midi_channel
+        self._simulate_h9 = simulate_h9
+        self._simulate_preset = simulate_preset
+        self._enable_gpio = enable_gpio
 
         self._midi: H9Midi | None = None
-        self._transport: MidiTransport | None = None
+        self._transport: H9Transport | None = None
         self._connected_device_id: int = device_id
         self._gpio: GpioInputManager = GpioInputManager()
 
@@ -145,6 +152,7 @@ class H9DeviceWorker(QtCore.QObject):
         self._last_good_bpm: float | None = None
         self._live_bpm: float | None = None
         self._last_sent_auto_bpm: int | None = None
+        self._connection_status = "Disconnected"
 
         self._backend = H9Backend(
             send_eventide=self._send_eventide,
@@ -175,6 +183,10 @@ class H9DeviceWorker(QtCore.QObject):
         - "action_name" -> fires on short press (tap)
         - "action_name_hold" -> fires on long press (hold)
         """
+        if not self._enable_gpio:
+            self._logger.info("GPIO disabled")
+            return
+
         if not self._gpio.is_available():
             self._logger.info("GPIO not available, skipping GPIO bindings")
             return
@@ -658,6 +670,7 @@ class H9DeviceWorker(QtCore.QObject):
             self._waiters.clear()
 
     def _connect(self) -> None:
+        connection_status = "Simulated H9" if self._simulate_h9 else "Connected"
         self._emit_state(
             DashboardState(
                 connected=False,
@@ -669,19 +682,27 @@ class H9DeviceWorker(QtCore.QObject):
         )
 
         try:
-            midi = H9Midi(device_prefix=self._device_prefix)
-            midi.connect()
-            transport = MidiTransport(midi)
+            if self._simulate_h9:
+                midi = None
+                transport = SimulatedH9Transport(
+                    device_id=self._device_id,
+                    initial_program=self._simulate_preset,
+                )
+            else:
+                midi = H9Midi(device_prefix=self._device_prefix)
+                midi.connect()
+                transport = MidiTransport(midi)
 
             self._midi = midi
             self._transport = transport
             self._connected_device_id = self._device_id
+            self._connection_status = connection_status
             self._start_rx_thread_if_needed()
 
             self._emit_state(
                 DashboardState(
                     connected=True,
-                    status_text="Connected",
+                    status_text=connection_status,
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
                     lock_pitch=self._config.lock_pitch,
@@ -691,6 +712,7 @@ class H9DeviceWorker(QtCore.QObject):
             self._logger.exception("Failed to connect")
             self._midi = None
             self._transport = None
+            self._connection_status = f"Connect failed: {exc}"
             self._emit_state(
                 DashboardState(
                     connected=False,
@@ -753,7 +775,7 @@ class H9DeviceWorker(QtCore.QObject):
             self._emit_state(
                 DashboardState(
                     connected=True,
-                    status_text="Connected",
+                    status_text=self._connection_status,
                     preset_number=preset.preset_number,
                     preset_name=preset.preset_name,
                     algorithm_name=preset.algorithm_name,

@@ -15,6 +15,41 @@
             ],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Python: Simulated H9 Dashboard",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ui_main.py",
+            "args": [
+                "--simulate-h9",
+                "--no-audio",
+                "--no-gpio",
+                "--log-level",
+                "DEBUG"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Python: Screenshot Simulated H9",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ui_main.py",
+            "args": [
+                "--simulate-h9",
+                "--simulate-preset",
+                "0",
+                "--screenshot",
+                "${workspaceFolder}/artifacts/dashboard.png",
+                "--exit-after-screenshot",
+                "--no-audio",
+                "--no-gpio",
+                "--log-level",
+                "INFO"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

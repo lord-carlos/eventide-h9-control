@@ -448,6 +448,8 @@ class DashboardWidget(QtWidgets.QWidget):
         self._apply_state(state)
 
     def _apply_state(self, state: DashboardState) -> None:
+        self._status_dot.setToolTip(state.status_text)
+
         # status dot
         if state.connected:
             self._status_dot.setStyleSheet("""
@@ -520,7 +522,7 @@ class DashboardWidget(QtWidgets.QWidget):
         name = getattr(knob, "name", fallback_label)
         percent = int(getattr(knob, "percent", 0))
         pretty = getattr(knob, "pretty", None)
-        raw_value = getattr(knob, "value", None)
+        raw_value = getattr(knob, "raw_value", None)
         widget.set_state(name=name, percent=percent, pretty=pretty, raw_value=raw_value)
         widget.set_enabled(enabled)
 

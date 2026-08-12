@@ -55,3 +55,26 @@ All keyboard shortcuts are configurable in `config.json`. Default bindings:
 ### GPIO Hardware Buttons (Raspberry Pi)
 
 GPIO button support is available for Raspberry Pi hardware buttons.
+
+### Simulated H9 and Screenshots
+
+Run the dashboard without an H9 connected by using the in-memory simulated H9:
+
+```text
+uv run python ui_main.py --simulate-h9 --log-level DEBUG
+```
+
+The simulator includes four deterministic presets. Use `--simulate-preset 0` through
+`--simulate-preset 3` to choose the initial preset.
+
+Capture a fixed-size dashboard screenshot and exit automatically:
+
+```text
+uv run python ui_main.py --simulate-h9 --simulate-preset 0 \
+    --screenshot artifacts/dashboard.png --exit-after-screenshot \
+    --no-audio --no-gpio
+```
+
+Screenshot mode captures the Qt dashboard content at 1180x840 pixels. Adjust the
+size with `--screenshot-width` and `--screenshot-height`, or change the wait time
+with `--screenshot-delay-ms`.

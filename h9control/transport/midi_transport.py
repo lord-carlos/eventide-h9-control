@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 import logging
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import mido
 
@@ -12,6 +12,20 @@ from h9control.protocol.sysex import format_sysex_bytes
 
 
 logger = logging.getLogger(__name__)
+
+
+class H9Transport(Protocol):
+    """Operations shared by real and simulated H9 transports."""
+
+    def close(self) -> None: ...
+
+    def send_sysex(self, framed_or_unframed: Sequence[int] | bytes | bytearray) -> None: ...
+
+    def receive_pending(self) -> list[mido.Message]: ...
+
+    def send_program_change(self, program: int, channel: int = 0) -> None: ...
+
+    def send_control_change(self, control: int, value: int, channel: int = 0) -> None: ...
 
 
 @dataclass(frozen=True)
