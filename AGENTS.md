@@ -15,6 +15,10 @@ Control the Eventide H9 via MIDI and SysEx. Primary flows:
 - Start the app with: `uv run python ui_main.py --log-level DEBUG`
 - Stop a running instance before starting another.
 
+## Dashboard UI
+- Target display is landscape `1280x720`.
+- The main dashboard must fit on one screen without scrolling.
+
 ## Coding notes
 - Keep MIDI/Protocol work off the UI thread.
 - UI should trigger actions; background worker handles SysEx/Program Change and publishes a single current state snapshot.

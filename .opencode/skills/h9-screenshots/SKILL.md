@@ -15,11 +15,12 @@ Run this command from the repository root:
 ```text
 uv run python ui_main.py --simulate-h9 --simulate-preset 0 \
     --screenshot artifacts/dashboard.png --exit-after-screenshot \
+    --screenshot-width 1280 --screenshot-height 720 \
     --no-audio --no-gpio --log-level INFO
 ```
 
 The command launches the real Qt dashboard, waits for the initial state, saves
-the dashboard content, and exits. The default screenshot size is 1180x840.
+the dashboard content, and exits. Use `1280x720` for the production display.
 The screenshot does not include the native operating-system title bar.
 
 Use `--screenshot-delay-ms` when a visual change needs more time to settle.
@@ -56,6 +57,7 @@ After capture, inspect the PNG with the image-reading tool. Review these areas:
 - Knob visibility, labels, progress bars, and raw values
 - BPM controls and status indicator
 - Spacing at the fixed viewport size
+- No dashboard scrolling or clipping
 - Behavior when presets have different names and values
 
 Use image-diff tooling for automated regression detection. Use AI visual
