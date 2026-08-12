@@ -508,7 +508,8 @@ class H9DeviceWorker(QtCore.QObject):
                 ),
             )
 
-        # Try to push to device via MIDI CC.
+        # Effect knobs are controlled via MIDI CC. The 0x200 SysEx keys are
+        # system-variable byte parameters, not current preset knob values.
         # H9 maps knobs to CC: Knob 1 = CC 22, Knob 2 = CC 23, ..., Knob 10 = CC 31
         if self._transport is None:
             self._connect()
