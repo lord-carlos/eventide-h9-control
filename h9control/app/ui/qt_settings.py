@@ -113,6 +113,7 @@ class TouchScrollHandler(QtCore.QObject):
 class SettingsWidget(QtWidgets.QWidget):
     back_requested = QtCore.Signal()
     settings_changed = QtCore.Signal()  # Emitted when settings change that affect UI
+    audio_devices_refresh_requested = QtCore.Signal()
     audio_settings_changed = (
         QtCore.Signal()
     )  # Emitted when audio device/channel settings change
@@ -196,14 +197,24 @@ class SettingsWidget(QtWidgets.QWidget):
         self._device_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
         self._device_combo.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
         configure_combobox_for_touch(self._device_combo)
-        self._populate_devices()
+        self._device_refresh_status = QtWidgets.QLabel()
+        self._device_refresh_status.setWordWrap(True)
+        self._device_refresh_status.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._device_refresh_status.setStyleSheet("color: #777777;")
+        try:
+            self._populate_devices()
+        except Exception as exc:
+            logging.exception("Error listing audio devices")
+            self.show_device_refresh_error(str(exc))
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
 
         self._btn_refresh_devices = QtWidgets.QPushButton("Refresh")
         self._btn_refresh_devices.setMinimumHeight(COMBOBOX_MIN_HEIGHT)
         self._btn_refresh_devices.setMinimumWidth(120)
         self._btn_refresh_devices.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
-        self._btn_refresh_devices.clicked.connect(self.refresh_devices)
+        self._btn_refresh_devices.clicked.connect(
+            self.audio_devices_refresh_requested.emit
+        )
 
         device_row = QtWidgets.QHBoxLayout()
         device_row.addWidget(self._device_combo, stretch=1)
@@ -212,6 +223,7 @@ class SettingsWidget(QtWidgets.QWidget):
         lbl_device = QtWidgets.QLabel("Audio Input Device:")
         lbl_device.setFont(QtGui.QFont("Arial", 14))
         form_layout.addRow(lbl_device, device_row)
+        form_layout.addRow("", self._device_refresh_status)
 
         # Channel Selection - Left Channel
         self._channel_left_combo = QtWidgets.QComboBox()
@@ -384,21 +396,83 @@ class SettingsWidget(QtWidgets.QWidget):
         self._btn_back.clicked.connect(self.back_requested.emit)
         layout.addWidget(self._btn_back)
 
-    def _populate_devices(self) -> None:
+    def _populate_devices(self) -> int:
+        """Populate input devices and return the number discovered."""
+        devices = sd.query_devices()
+        input_devices = [
+            (device_id, device)
+            for device_id, device in enumerate(devices)
+            if int(device.get("max_input_channels", 0)) > 0
+        ]
+
         self._device_combo.clear()
+        for device_id, device in input_devices:
+            name = device.get("name", f"Device {device_id}")
+            self._device_combo.addItem(name, userData=device_id)
+            self._device_combo.setItemData(
+                self._device_combo.count() - 1,
+                device.get("hostapi"),
+                QtCore.Qt.ItemDataRole.UserRole + 1,
+            )
 
-        # Add "Default" option? Or just list devices.
-        # Let's list devices.
+        return len(input_devices)
 
+    def _device_identity(self, index: int) -> tuple[str, int | None] | None:
+        if index < 0 or index >= self._device_combo.count():
+            return None
+
+        host_api = self._device_combo.itemData(
+            index, QtCore.Qt.ItemDataRole.UserRole + 1
+        )
+        return (
+            self._device_combo.itemText(index),
+            int(host_api) if host_api is not None else None,
+        )
+
+    def _find_device_by_identity(
+        self, identity: tuple[str, int | None] | None
+    ) -> int:
+        if identity is None:
+            return -1
+
+        for index in range(self._device_combo.count()):
+            if self._device_identity(index) == identity:
+                return index
+        return -1
+
+    def _restore_channel_selection(self, channels: list[int]) -> None:
+        """Restore channels when supported, falling back to available channels."""
+        if self._channel_left_combo is None or self._channel_right_combo is None:
+            return
+        if self._channel_left_combo.count() == 0 or self._channel_right_combo.count() == 0:
+            return
+
+        left_index = (
+            self._channel_left_combo.findData(channels[0]) if channels else -1
+        )
+        right_index = (
+            self._channel_right_combo.findData(channels[1]) if len(channels) > 1 else -1
+        )
+        if left_index < 0:
+            left_index = 0
+        if right_index < 0:
+            right_index = min(1, self._channel_right_combo.count() - 1)
+
+        left_was_blocked = self._channel_left_combo.blockSignals(True)
+        right_was_blocked = self._channel_right_combo.blockSignals(True)
         try:
-            devices = sd.query_devices()
-            for i, dev in enumerate(devices):
-                max_channels = int(dev.get("max_input_channels", 0))
-                if max_channels > 0:
-                    name = dev.get("name", f"Device {i}")
-                    self._device_combo.addItem(name, userData=i)
-        except Exception as e:
-            logging.error(f"Error listing audio devices: {e}")
+            self._channel_left_combo.setCurrentIndex(left_index)
+            self._channel_right_combo.setCurrentIndex(right_index)
+        finally:
+            self._channel_left_combo.blockSignals(left_was_blocked)
+            self._channel_right_combo.blockSignals(right_was_blocked)
+
+        selected_channels = [
+            int(self._channel_left_combo.currentData()),
+            int(self._channel_right_combo.currentData()),
+        ]
+        if selected_channels != self.config.audio_selected_channels:
+            self.config.audio_selected_channels = selected_channels
 
     def _populate_channels(self, device_id: int | None) -> None:
         """Populate channel combo boxes based on selected device's capabilities."""
@@ -433,89 +507,118 @@ class SettingsWidget(QtWidgets.QWidget):
 
     def _restore_audio_selection(self) -> None:
         """Restore the saved device/channel selection into the combo boxes."""
-        # Audio Device - restore saved device if it exists
+        device_was_blocked = self._device_combo.blockSignals(True)
         current_device_id = self.config.audio_input_device_id
-        if current_device_id is not None:
-            index = self._device_combo.findData(current_device_id)
-            if index >= 0:
-                self._device_combo.setCurrentIndex(index)
-            else:
-                # Saved device not found - update config to fallback device
-                fallback_device_id = self._device_combo.itemData(0)
-                if fallback_device_id is not None:
+        try:
+            if current_device_id is not None:
+                index = self._device_combo.findData(current_device_id)
+                if index >= 0:
+                    self._device_combo.setCurrentIndex(index)
+                elif self._device_combo.count() > 0:
+                    fallback_device_id = self._device_combo.itemData(0)
                     logging.warning(
                         f"Saved device {current_device_id} not found, "
                         f"falling back to device {fallback_device_id}"
                     )
-                    self.config.audio_input_device_id = fallback_device_id
-                    # Reset channels to defaults since device changed
-                    self.config.audio_selected_channels = [0, 1]
+                    self._device_combo.setCurrentIndex(0)
+                    if fallback_device_id is not None:
+                        self.config.audio_input_device_id = int(fallback_device_id)
+                        self.config.audio_selected_channels = [0, 1]
+                else:
+                    self._device_combo.setCurrentIndex(-1)
 
-        # Always populate channels based on currently selected device
-        # (handles first run, missing saved device, or device at index 0)
-        selected_device_id = self._device_combo.currentData()
-        if selected_device_id is not None:
-            self._populate_channels(selected_device_id)
-
-        # Load selected channels after population ensures items exist
-        selected_channels = self.config.audio_selected_channels
-        if len(selected_channels) >= 2:
-            # Set left channel
-            left_idx = (
-                self._channel_left_combo.findData(selected_channels[0])
-                if self._channel_left_combo
-                else -1
-            )
-            if left_idx >= 0:
-                self._channel_left_combo.setCurrentIndex(left_idx)
-
-            # Set right channel
-            right_idx = (
-                self._channel_right_combo.findData(selected_channels[1])
-                if self._channel_right_combo
-                else -1
-            )
-            if right_idx >= 0:
-                self._channel_right_combo.setCurrentIndex(right_idx)
-
-    def refresh_devices(self) -> None:
-        """Re-query audio devices and restore the current selection.
-
-        Sounddevice indices can shift when devices are hotplugged, so the
-        previous selection is matched by name first, then by index.
-        """
-        prev_name = self._device_combo.currentText()
-        prev_id = self._device_combo.currentData()
-
-        self._device_combo.blockSignals(True)
-        if self._channel_left_combo:
-            self._channel_left_combo.blockSignals(True)
-        if self._channel_right_combo:
-            self._channel_right_combo.blockSignals(True)
-
-        try:
-            self._populate_devices()
-
-            new_index = self._device_combo.findText(prev_name) if prev_name else -1
-            if new_index < 0 and prev_id is not None:
-                new_index = self._device_combo.findData(prev_id)
-            if new_index >= 0:
-                self._device_combo.setCurrentIndex(new_index)
-
-            self._restore_audio_selection()
+            selected_device_id = self._device_combo.currentData()
+            if selected_device_id is not None:
+                self._populate_channels(int(selected_device_id))
+                self._restore_channel_selection(self.config.audio_selected_channels)
         finally:
-            self._device_combo.blockSignals(False)
-            if self._channel_left_combo:
-                self._channel_left_combo.blockSignals(False)
-            if self._channel_right_combo:
-                self._channel_right_combo.blockSignals(False)
+            self._device_combo.blockSignals(device_was_blocked)
 
-        selected_id = self._device_combo.currentData()
-        if selected_id != prev_id:
-            logging.info(
-                f"Audio device changed from {prev_id} to {selected_id} after refresh"
+    def refresh_devices(self) -> int:
+        """Re-query devices while preserving the current physical selection."""
+        previous_index = self._device_combo.currentIndex()
+        previous_device_id = self._device_combo.currentData()
+        previous_identity = self._device_identity(previous_index)
+        previous_channels = list(self.config.audio_selected_channels)
+
+        device_was_blocked = self._device_combo.blockSignals(True)
+        left_was_blocked = (
+            self._channel_left_combo.blockSignals(True)
+            if self._channel_left_combo
+            else False
+        )
+        right_was_blocked = (
+            self._channel_right_combo.blockSignals(True)
+            if self._channel_right_combo
+            else False
+        )
+        try:
+            device_count = self._populate_devices()
+
+            new_index = self._find_device_by_identity(previous_identity)
+            if (
+                new_index < 0
+                and previous_identity is None
+                and previous_device_id is not None
+            ):
+                new_index = self._device_combo.findData(previous_device_id)
+            if new_index < 0 and previous_index >= 0 and device_count > 0:
+                new_index = 0
+            elif previous_index < 0:
+                # Keep an unselected list unselected so newly found devices are
+                # available for an explicit user choice.
+                new_index = -1
+            self._device_combo.setCurrentIndex(new_index)
+
+            selected_device_id = self._device_combo.currentData()
+            selected_identity = self._device_identity(
+                self._device_combo.currentIndex()
             )
-            self.audio_settings_changed.emit()
+            if selected_device_id is None:
+                if self.config.audio_input_device_id is not None:
+                    self.config.audio_input_device_id = None
+            elif (
+                self.config.audio_input_device_id is not None
+                and int(selected_device_id) != self.config.audio_input_device_id
+            ):
+                # Device indices can shift after a hot-plug. Persist the new
+                # index for the same device identified above.
+                self.config.audio_input_device_id = int(selected_device_id)
+            elif (
+                previous_identity is not None
+                and selected_identity != previous_identity
+                and self.config.audio_input_device_id is None
+            ):
+                self.config.audio_input_device_id = int(selected_device_id)
+
+            self._populate_channels(
+                int(selected_device_id) if selected_device_id is not None else None
+            )
+            self._restore_channel_selection(previous_channels)
+        finally:
+            self._device_combo.blockSignals(device_was_blocked)
+            if self._channel_left_combo:
+                self._channel_left_combo.blockSignals(left_was_blocked)
+            if self._channel_right_combo:
+                self._channel_right_combo.blockSignals(right_was_blocked)
+
+        if device_count == 0:
+            self._set_device_refresh_status("No audio input devices found.")
+        else:
+            noun = "device" if device_count == 1 else "devices"
+            self._set_device_refresh_status(
+                f"Audio devices refreshed: {device_count} input {noun}."
+            )
+        logging.info("Refreshed audio input device list: %d device(s)", device_count)
+        return device_count
+
+    def show_device_refresh_error(self, message: str) -> None:
+        self._device_refresh_status.setText(f"Audio device refresh failed: {message}")
+        self._device_refresh_status.setStyleSheet("color: #b00020;")
+
+    def _set_device_refresh_status(self, message: str) -> None:
+        self._device_refresh_status.setText(message)
+        self._device_refresh_status.setStyleSheet("color: #777777;")
 
     def _load_settings(self) -> None:
         self._restore_audio_selection()

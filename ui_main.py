@@ -15,6 +15,9 @@ from h9control.app.ui.qt_dashboard import (
 )
 from h9control.app.ui.qt_worker import H9DeviceWorker
 from h9control.audio.beat_detector import BeatDetector
+from h9control.audio.device_refresh import (
+    refresh_audio_devices as refresh_audio_devices_with_detector,
+)
 from h9control.logging_setup import configure_logging
 
 
@@ -189,6 +192,31 @@ def main() -> None:
 
     window.settings.audio_settings_changed.connect(
         restart_beat_detector, QtCore.Qt.ConnectionType.QueuedConnection
+    )
+
+    def refresh_audio_device_list() -> None:
+        detector_was_running = beat_detector is not None and beat_detector.running
+        try:
+            device_count = refresh_audio_devices_with_detector(
+                beat_detector, window.settings.refresh_devices
+            )
+        except Exception as exc:
+            logger.exception("Failed to refresh audio devices")
+            window.settings.show_device_refresh_error(str(exc))
+            return
+
+        if (
+            detector_was_running
+            and beat_detector is not None
+            and device_count > 0
+            and not beat_detector.running
+        ):
+            window.settings.show_device_refresh_error(
+                "Devices refreshed, but the audio stream could not be restarted."
+            )
+
+    window.settings.audio_devices_refresh_requested.connect(
+        refresh_audio_device_list, QtCore.Qt.ConnectionType.QueuedConnection
     )
 
     # Reapply theme when settings change (hot reload)
