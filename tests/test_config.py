@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,7 @@ def test_save_then_load_round_trip(tmp_path: Path) -> None:
     manager.knob_order = ("DLY-A", "DLY-B")
     manager.theme_mode = "dark"
     manager.auto_bpm_mode = "continuous"
+    manager.flush()  # setters persist via the debounced save
 
     reloaded = ConfigManager(path)
     assert reloaded.audio_input_device_id == 3
@@ -148,6 +150,8 @@ def test_partial_audio_config_uses_defaults(tmp_path: Path) -> None:
 def test_save_to_unwritable_path_does_not_raise(tmp_path: Path) -> None:
     manager = ConfigManager(tmp_path)
     manager.theme_mode = "dark"
+    # The debounced save must fail gracefully too (target path is a directory).
+    manager.flush()
     assert not (tmp_path / "config.json").exists()
 
 
@@ -163,4 +167,132 @@ def test_default_shortcuts_have_expected_actions() -> None:
     keyboard = ShortcutsConfig.default().keyboard
     assert keyboard["sync_live_bpm"] == ["D"]
     assert keyboard["settings"] == ["S"]
-    assert len(keyboard) == 12
+    assert len(keyboard) == 20
+
+
+def test_default_shortcuts_cover_preset_navigation() -> None:
+    keyboard = ShortcutsConfig.default().keyboard
+    assert keyboard["next_preset"] == ["Right"]
+    assert keyboard["prev_preset"] == ["Left"]
+    assert keyboard["connect_refresh"] == ["F5"]
+    for index in range(1, 6):
+        assert keyboard[f"jump_to_preset_{index}"]
+
+    # No navigation key may collide with the knob/BPM/settings bindings.
+    navigation_keys: set[str] = set()
+    for action in (
+        "next_preset",
+        "prev_preset",
+        "connect_refresh",
+        *(f"jump_to_preset_{i}" for i in range(1, 6)),
+    ):
+        navigation_keys.update(keyboard[action])
+    previously_defined = {"1", "Q", "2", "W", "3", "E", "4", "R", "5", "T", "D", "S"}
+    assert not navigation_keys & previously_defined
+
+
+def test_corrupt_json_backed_up_and_reports_load_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    raw = "{not valid json!!"
+    path.write_text(raw)
+    manager = ConfigManager(path)
+    assert manager.config == AppConfig.default()
+    assert manager.load_error  # error message exposed for the UI
+    backup = path.with_suffix(".json.bak")
+    assert backup.exists()
+    assert backup.read_text() == raw
+
+
+def test_load_error_cleared_after_successful_load(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text("{broken")
+    manager = ConfigManager(path)
+    assert manager.load_error
+    path.write_text(json.dumps({"theme_mode": "dark"}))
+    reloaded = ConfigManager(path)
+    assert reloaded.load_error is None
+    assert reloaded.config.theme_mode == "dark"
+
+
+def test_clean_and_missing_configs_report_no_load_error(tmp_path: Path) -> None:
+    valid = tmp_path / "valid.json"
+    valid.write_text(json.dumps({"theme_mode": "dark"}))
+    assert ConfigManager(valid).load_error is None
+    assert ConfigManager(tmp_path / "missing.json").load_error is None
+
+
+def _count_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[str]:
+    """Patch ConfigManager._write_file to count real writes."""
+    calls: list[str] = []
+    original = ConfigManager._write_file
+
+    def counting(self: ConfigManager, serialized: str) -> None:
+        calls.append(serialized)
+        original(self, serialized)
+
+    monkeypatch.setattr(ConfigManager, "_write_file", counting)
+    return calls
+
+
+def test_save_batches_multiple_setters_into_one_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+    writes = _count_writes(monkeypatch)
+
+    manager.lock_delay = True
+    manager.lock_feedback = True
+    manager.lock_pitch = True
+    # Not written yet: setters only mark the config dirty.
+    assert not path.exists()
+    manager.flush()
+    assert path.exists()
+    assert len(writes) == 1
+    data = json.loads(path.read_text())
+    assert data["lock_delay"] is True
+    assert data["lock_feedback"] is True
+    assert data["lock_pitch"] is True
+
+
+def test_flush_without_changes_skips_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+    writes = _count_writes(monkeypatch)
+
+    manager.theme_mode = "dark"
+    manager.flush()
+    assert len(writes) == 1
+    # Unchanged setter value → flush is a no-op.
+    manager.theme_mode = "dark"
+    manager.flush()
+    assert len(writes) == 1
+    # A second flush with no further changes writes nothing either.
+    manager.flush()
+    assert len(writes) == 1
+
+
+def test_debounced_timer_persists_after_quiet_period(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(ConfigManager, "_SAVE_DEBOUNCE_SECONDS", 0.05)
+    manager = ConfigManager(path)
+    manager.theme_mode = "dark"
+    time.sleep(0.3)
+    assert path.exists()
+    assert json.loads(path.read_text())["theme_mode"] == "dark"
+
+
+def test_save_synchronous_and_not_scheduled_by_debounce(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+    manager.theme_mode = "dark"
+    manager.save()  # public, immediate save still available
+    assert path.exists()
+    assert manager._save_timer is None
+    assert manager._dirty is False
