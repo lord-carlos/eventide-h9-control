@@ -7,7 +7,7 @@ from typing import Any, Protocol, cast
 
 import mido
 
-from midi import H9Midi
+from h9control.transport.h9_midi import H9Midi
 from h9control.protocol.sysex import format_sysex_bytes
 
 
