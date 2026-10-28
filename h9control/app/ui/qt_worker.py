@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from PySide6 import QtCore
 
+from h9control.app.bpm_sync import BpmSyncMixin, sanitize_live_bpm
 from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
@@ -30,6 +31,10 @@ from h9control.transport.midi_transport import H9Transport, MidiTransport
 from h9control.transport.gpio_input import GpioInputManager
 from h9control.transport.simulated_h9 import SimulatedH9Transport
 from midi import H9Midi
+
+# Real hardware needs about this long to settle after a program change
+# before a fresh preset dump returns the new state.
+_PRESET_SETTLE_MS = 300
 
 
 class _FrameWaiter:
@@ -81,7 +86,7 @@ class _PresetChangeDetector:
         return len(unique) >= 2
 
 
-class H9DeviceWorker(QtCore.QObject):
+class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
     state_changed = QtCore.Signal(object)
     preset_change_detected = QtCore.Signal()
 
@@ -345,27 +350,6 @@ class H9DeviceWorker(QtCore.QObject):
                     modifier_actions=modifier_actions if modifier_actions else None,
                 )
 
-    def _invoke_on_main_thread(self, method: Callable, *args) -> None:
-        """Invoke a Qt slot on the main thread from GPIO callback."""
-        self._logger.debug(f"_invoke_on_main_thread called for {method.__name__}")
-
-        def wrapper():
-            try:
-                self._logger.debug(
-                    f"_invoke_on_main_thread executing: {method.__name__} with args {args}"
-                )
-                method(*args)
-            except Exception:
-                self._logger.exception(
-                    f"Failed to invoke {method.__name__} on main thread"
-                )
-
-        try:
-            QtCore.QTimer.singleShot(0, wrapper)
-            self._logger.debug(f"QTimer.singleShot scheduled for {method.__name__}")
-        except Exception:
-            self._logger.exception(f"Failed to schedule QTimer for {method.__name__}")
-
     @QtCore.Slot()
     def connect_or_refresh(self) -> None:
         if self._transport is None:
@@ -395,8 +379,7 @@ class H9DeviceWorker(QtCore.QObject):
             preset_jump = PresetJump(self._transport, self._midi_channel)
             preset_jump.jump_to_preset(program)
             self._current_program = program
-            time.sleep(0.3)
-            self._refresh_state()
+            self._schedule_state_refresh()
         except Exception as exc:
             self._logger.exception("Preset jump failed")
             prev = self._last_state
@@ -509,9 +492,20 @@ class H9DeviceWorker(QtCore.QObject):
                 ),
             )
 
+        # Convert the 14-bit raw value to the 7-bit MIDI CC grid (0-127).
+        # The H9 sets knob values via 7-bit CC, so its internal 14-bit value
+        # lands on that coarser grid, not on the exact `new_raw` we compute.
+        cc_value = max(0, min(127, int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 127.0))))
+
         # Effect knobs are controlled via MIDI CC. The 0x200 SysEx keys are
         # system-variable byte parameters, not current preset knob values.
-        # H9 maps knobs to CC: Knob 1 = CC 22, Knob 2 = CC 23, ..., Knob 10 = CC 31
+        #
+        # CC numbers follow the H9's hardware knob row, but ALGO_MAP lists
+        # knob names bottom-left → top-left (i.e. most prominent knob last),
+        # so the list must be reversed before indexing: after reversal,
+        # DLY-A is knob #3 → CC 21+3 = 24, matching the H9's real mapping
+        # verified empirically with scripts/test_delay_cc.py (CC 24 changes
+        # Delay A time, CC 25 changes Delay B time).
         if self._transport is None:
             self._connect()
         if self._transport is not None and algo_key:
@@ -522,12 +516,7 @@ class H9DeviceWorker(QtCore.QObject):
             knob_names_upper = [k.upper() for k in knob_names]
             if name in knob_names_upper:
                 knob_index_1based = knob_names_upper.index(name) + 1
-                cc_number = (
-                    21 + knob_index_1based
-                )  # CC 22 for knob 1, CC 31 for knob 10
-                # Convert 14-bit raw value to 7-bit MIDI CC value (0-127)
-                cc_value = int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 127.0))
-                cc_value = max(0, min(127, cc_value))
+                cc_number = 21 + knob_index_1based
                 try:
                     self._transport.send_control_change(
                         control=cc_number,
@@ -542,6 +531,10 @@ class H9DeviceWorker(QtCore.QObject):
                         cc_number,
                         cc_value,
                     )
+            else:
+                self._logger.debug(
+                    f"Knob '{name}' not mapped to a CC for algo '{algo_key}'"
+                )
         elif self._transport is None:
             self._logger.warning(f"Cannot send CC for '{name}': not connected")
         elif not algo_key:
@@ -549,110 +542,26 @@ class H9DeviceWorker(QtCore.QObject):
                 f"Cannot send CC for '{name}': no algorithm_key loaded"
             )
 
-        self._knob_overrides[name] = new_raw
-
-    @QtCore.Slot(int)
-    def adjust_bpm(self, delta_bpm: int) -> None:
-        if self._transport is None:
-            self._connect()
-        if self._transport is None:
-            return
-
-        bpm_now = self._sanitize_bpm(self._last_state.bpm)
-        if bpm_now is None:
-            return
-
-        target = int(round(bpm_now)) + int(delta_bpm)
-        target = max(20, min(300, target))
-
-        try:
-            self._backend.set_bpm(target)
-        except Exception:
-            self._logger.exception("Failed to set BPM")
-            return
-
-        # Re-read state so UI stays in sync with the pedal.
-        self._refresh_state()
-
-    @QtCore.Slot()
-    def sync_live_bpm(self) -> None:
-        if self._transport is None:
-            self._connect()
-        if self._transport is None:
-            return
-
-        if self._live_bpm is None:
-            return
-
-        target = int(round(self._live_bpm))
-        target = max(20, min(300, target))
-
-        try:
-            self._backend.set_bpm(target)
-            self._last_sent_auto_bpm = target
-        except Exception:
-            self._logger.exception("Failed to set BPM")
-            return
-
-        # Re-read state so UI stays in sync with the pedal.
-        self._refresh_state()
-
-    def _check_auto_bpm_sync(self) -> int | None:
-        """Check if auto BPM sync should fire and send BPM if needed.
-
-        Returns the newly sent BPM value if successful, None otherwise.
-        """
-        if self._config.auto_bpm_mode != "continuous":
-            self._logger.debug(f"Auto BPM sync not in continuous mode, skipping")
-            return None
-
-        if self._live_bpm is None:
-            self._logger.debug(f"No live BPM available, skipping auto-sync")
-            return None
-
-        if self._transport is None:
-            self._logger.debug(f"Not connected, skipping auto-sync")
-            return None
-
-        rounded_bpm = int(round(self._live_bpm))
-
-        # Only send if the rounded value has changed
-        if rounded_bpm == self._last_sent_auto_bpm:
-            self._logger.debug(
-                f"Auto BPM sync: rounded BPM {rounded_bpm} unchanged, skipping"
-            )
-            return None
-
-        # Clamp to valid range
-        target = max(20, min(300, rounded_bpm))
-
-        try:
-            self._backend.set_bpm(target)
-            self._last_sent_auto_bpm = target
-            self._logger.info(f"Auto-synced BPM: {target}")
-            return target
-        except Exception:
-            self._logger.exception("Failed to auto-sync BPM")
-            return None
-
-    def _sanitize_bpm(self, bpm: float | None) -> float | None:
-        if bpm is None:
-            return self._last_good_bpm
-
-        # Guardrail: we have observed occasional bogus tempo reads.
-        if bpm < 20.0 or bpm > 300.0:
-            self._logger.debug(
-                "Ignoring implausible BPM reading: %s (last_good=%s)",
-                bpm,
-                self._last_good_bpm,
-            )
-            return self._last_good_bpm
-
-        self._last_good_bpm = bpm
-        return bpm
+        # Store the override on the 7-bit grid the device actually received
+        # (reconstructed from the CC value we sent — identical to `cc_value`
+        # since that is what the 7-bit conversion produces). Storing the raw
+        # 14-bit value would leave the UI showing a value the device does
+        # not have, and repeated small adjustments would never converge.
+        # When nothing was sent (no transport/unmapped knob) the same CC
+        # value is used so stored overrides stay on one consistent grid.
+        stored_raw = max(
+            0,
+            min(MAX_KNOB_VALUE_14BIT, int(round((cc_value / 127.0) * MAX_KNOB_VALUE_14BIT))),
+        )
+        self._knob_overrides[name] = stored_raw
 
     @QtCore.Slot()
     def shutdown(self) -> None:
+        # Stop the event-refresh timer first: it may still be armed from an
+        # earlier preset-change event and must not fire against a closed
+        # transport once we tear everything down below.
+        self._event_refresh_timer.stop()
+
         self._gpio.unbind_all()
 
         self._rx_stop.set()
@@ -820,8 +729,7 @@ class H9DeviceWorker(QtCore.QObject):
                 program=next_program, channel=self._midi_channel
             )
             self._current_program = next_program
-            time.sleep(0.3)
-            self._refresh_state()
+            self._schedule_state_refresh()
         except Exception as exc:
             self._logger.exception("Program change failed")
             prev = self._last_state
@@ -841,6 +749,24 @@ class H9DeviceWorker(QtCore.QObject):
                 )
             )
 
+    def _schedule_state_refresh(self) -> None:
+        """Schedule the post-preset-change refresh instead of blocking.
+
+        Real hardware needs ~300 ms to settle after a program change, but
+        sleeping in-place blocks the worker thread and drops queued knob
+        tweaks / BPM adjusts / GPIO events. Schedule the refresh via the
+        worker thread's event loop instead (the worker is a QObject that
+        lives on that thread).
+
+        The simulated transport answers instantly and tests drive the
+        worker without a running Qt event loop (timers would never fire),
+        so it refreshes synchronously.
+        """
+        if self._simulate_h9:
+            self._refresh_state()
+            return
+        QtCore.QTimer.singleShot(_PRESET_SETTLE_MS, self._refresh_state)
+
     def _emit_state(self, state: DashboardState) -> None:
         # self._logger.debug(f"_emit_state called: {state}")
         # Always update live_bpm in state if available, and check for auto-sync
@@ -855,9 +781,10 @@ class H9DeviceWorker(QtCore.QObject):
 
     @QtCore.Slot(float)
     def update_live_bpm(self, bpm: float) -> None:
-        if self._live_bpm == bpm:
+        live = sanitize_live_bpm(bpm)
+        if self._live_bpm == live:
             return
-        self._live_bpm = bpm
+        self._live_bpm = live
         self._emit_state(self._state_with_overrides())
 
     @QtCore.Slot()
@@ -924,7 +851,9 @@ class H9DeviceWorker(QtCore.QObject):
                 time.sleep(0.05)
                 continue
 
-            for msg in transport.receive_pending():
+            msgs = transport.receive_pending()
+            has_traffic = bool(msgs)
+            for msg in msgs:
                 frame = decode_eventide_sysex(msg)
                 if frame is None:
                     continue
@@ -940,7 +869,13 @@ class H9DeviceWorker(QtCore.QObject):
                 ):
                     self.preset_change_detected.emit()
 
-            time.sleep(0.005)
+            with self._waiters_lock:
+                await_frame = bool(self._waiters)
+
+            # Poll quickly while a SysEx response is being awaited or the
+            # device is streaming (keeps waiter latency low); back off when
+            # idle to cut CPU churn on the Pi.
+            time.sleep(0.005 if (has_traffic or await_frame) else 0.02)
         self._logger.info("RX loop stopped")
 
     def _try_deliver_to_waiters(self, frame: SysexFrame) -> bool:
