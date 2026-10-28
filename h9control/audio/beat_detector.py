@@ -1,4 +1,5 @@
-"""Librosa-based beat detector with lock-free ring buffer for Raspberry Pi."""
+"""Librosa-based beat detector with a single-producer/single-consumer ring
+buffer for Raspberry Pi."""
 
 from __future__ import annotations
 
@@ -47,6 +48,12 @@ MONO_MODE = False  # Set to True to use only first channel (halves CPU/USB bandw
 SILENCE_THRESHOLD = 0.05  # Skip BPM calc when audio below this level
 HOLD_BPM_ON_SILENCE = True  # Keep last BPM during silence/breakdowns
 
+# SPSC safety margin: the analysis thread never reads closer to the published
+# write index than this many callback blocks (in interleaved samples). One
+# in-flight block is the provable minimum; two give headroom against
+# back-to-back callbacks. Beat detection tolerates this much staleness.
+READ_MARGIN_BLOCKS = 2
+
 # Harmonic (octave) correction: raw readings are mapped into the configured
 # BPM range by scoring these tempo multiples against the onset autocorrelation,
 # weighted by a log-normal prior around the perceptual tempo center.
@@ -73,10 +80,20 @@ SWITCH_CONFIRM_READINGS = 3  # Consecutive readings needed to confirm a tempo ch
 
 class BeatDetector(QObject):
     """
-    Beat detector using librosa with a lock-free ring buffer for real-time audio.
+    Beat detector using librosa with a single-producer/single-consumer ring
+    buffer for real-time audio.
 
-    Captures audio continuously using sounddevice callback with zero-copy ring buffer,
-    eliminates GIL contention, and provides fault detection for silent failures.
+    The audio callback (producer) writes each block into the ring buffer and
+    then publishes the write index with a single integer assignment -- the
+    callback never acquires a lock. The analysis thread (consumer) takes one
+    snapshot of the published index per read and only touches fully-written
+    samples behind it, minus a small safety margin (READ_MARGIN_BLOCKS), so
+    it never reads the producer's in-flight block. Index resets (stream
+    recovery, buffer resize) happen only while the stream is stopped, so no
+    producer or reader can race them.
+
+    Also provides fault detection for silent failures (callback stalls,
+    dead streams).
     """
 
     bpm_detected = Signal(float)
@@ -105,19 +122,20 @@ class BeatDetector(QObject):
         self.update_samples = int(UPDATE_INTERVAL * self.sample_rate)
         self.analysis_window_samples = int(ANALYSIS_WINDOW * self.sample_rate)
 
-        # Ring buffer - lock-free circular buffer
-        # Stores interleaved stereo samples or mono
+        # Single-producer/single-consumer ring buffer. Stores interleaved
+        # stereo samples or mono. `write_index` is the only datum shared
+        # between producer and consumer: it counts interleaved samples
+        # written since the last reset (monotonic; it never wraps) and is
+        # published by the audio callback with a single integer assignment,
+        # which readers treat as atomic on CPython. No locks on the audio
+        # path.
         channels = 1 if self.mono_mode else 2
         self.ring_buffer = np.zeros(self.buffer_samples * channels, dtype=np.float32)
         self.ring_size = len(self.ring_buffer)
-
-        # Atomic indices (only audio callback writes write_index)
-        self._write_lock = threading.Lock()  # Only for atomic index update
         self.write_index = 0
-        self.total_samples_written = 0  # Monotonic counter
 
         # Analysis tracking
-        self.last_read_total = 0  # Total samples read by analysis
+        self.last_read_total = 0  # Published index observed at the last read
 
         # Current BPM value (stabilized)
         self.bpm: float = 0.0
@@ -150,7 +168,10 @@ class BeatDetector(QObject):
         """
         Audio callback - called by sounddevice for each audio block.
 
-        Zero-copy: writes directly to ring buffer. Minimal GIL usage.
+        Producer side of the SPSC ring: writes the block without taking any
+        lock, then publishes the new write index with a single integer
+        assignment. The consumer only touches fully-written regions behind
+        the published index, so this needs no synchronization.
         """
         # Track XRUN conditions - overflow means hardware dropped frames
         if status.input_overflow:
@@ -167,26 +188,24 @@ class BeatDetector(QObject):
             # Extract selected stereo channels
             samples = self._extract_stereo_channels_fast(indata)
 
-        # Write to ring buffer
+        # Write to ring buffer, then publish. Only this thread (the audio
+        # callback) writes `write_index`, so the read-modify-write cannot
+        # race; the single assignment is the publish step consumers observe.
         sample_count = len(samples)
+        write_pos = self.write_index % self.ring_size
 
-        with self._write_lock:
-            write_pos = self.write_index % self.ring_size
+        # Handle wrap-around within this callback
+        if write_pos + sample_count <= self.ring_size:
+            # No wrap - single copy
+            self.ring_buffer[write_pos : write_pos + sample_count] = samples
+        else:
+            # Wrap around - two copies
+            first_part = self.ring_size - write_pos
+            self.ring_buffer[write_pos:] = samples[:first_part]
+            self.ring_buffer[: sample_count - first_part] = samples[first_part:]
 
-            # Handle wrap-around within this callback
-            if write_pos + sample_count <= self.ring_size:
-                # No wrap - single copy
-                self.ring_buffer[write_pos : write_pos + sample_count] = samples
-            else:
-                # Wrap around - two copies
-                first_part = self.ring_size - write_pos
-                self.ring_buffer[write_pos:] = samples[:first_part]
-                self.ring_buffer[: sample_count - first_part] = samples[first_part:]
-
-            # Update indices
-            self.write_index += sample_count
-            self.total_samples_written += sample_count
-            self.last_callback_time = time.time()
+        self.write_index += sample_count  # publish (single assignment)
+        self.last_callback_time = time.time()
 
     def _extract_stereo_channels_fast(self, indata: np.ndarray) -> np.ndarray:
         """
@@ -201,8 +220,11 @@ class BeatDetector(QObject):
         total_channels = indata.shape[1]
         num_frames = indata.shape[0]
 
-        if total_channels == 1:
-            # Mono input - duplicate to stereo
+        if total_channels == 1 or len(self.selected_channels) < 2:
+            # Mono input, or the configured channel list became shorter than
+            # two entries (config can change mid-stream): duplicate the first
+            # channel to stereo instead of indexing and risking an
+            # IndexError on the audio thread.
             return np.repeat(indata[:, 0], 2)
 
         # Extract selected channels
@@ -360,7 +382,6 @@ class BeatDetector(QObject):
 
         # Reset indices
         self.write_index = 0
-        self.total_samples_written = 0
         self.last_read_total = 0
 
     def _analysis_loop(self) -> None:
@@ -407,22 +428,22 @@ class BeatDetector(QObject):
                     self.bpm_detected.emit(-1.0)
                 continue
 
-            # Check for new audio data
+            # Check for new audio data. The unlocked read of write_index
+            # here is only a scheduling hint; _read_ring_buffer takes its
+            # own single consistent snapshot of the published index.
             channels = 1 if self.mono_mode else 2
-            samples_available = self.total_samples_written - self.last_read_total
+            samples_available = self.write_index - self.last_read_total
             samples_needed = self.update_samples * channels
 
             if samples_available < samples_needed:
                 logging.debug(f"Not enough audio: {samples_available}/{samples_needed}")
                 continue
 
-            # Read the full analysis window (newest audio), capped by the
-            # amount actually written so far
-            window_samples = min(
-                self.analysis_window_samples * channels, self.total_samples_written
-            )
+            # Read the full analysis window (newest settled audio), capped
+            # by the amount actually published so far
+            window_samples = min(self.analysis_window_samples * channels, self.write_index)
             snapshot = self._read_ring_buffer(window_samples)
-            self.last_read_total = self.total_samples_written
+            self.last_read_total = self.write_index
 
             if snapshot is not None and len(snapshot) > 0:
                 self._calculate_bpm(snapshot)
@@ -440,25 +461,47 @@ class BeatDetector(QObject):
 
     def _read_ring_buffer(self, sample_count: int) -> np.ndarray | None:
         """
-        Read samples from ring buffer.
+        Read the newest `sample_count` fully-written samples from the ring
+        buffer, ending READ_MARGIN_BLOCKS callback blocks behind the
+        producer's published write index.
 
-        Handles wrap-around by potentially copying two segments.
+        Consumer side of the SPSC ring: the producer's in-flight block starts
+        at the published index, so regions behind the index minus the margin
+        are never touched by the producer and need no lock. The data is
+        therefore up to ~READ_MARGIN_BLOCKS * buffer_size / sample_rate
+        seconds staler than the newest sample -- acceptable for beat
+        detection.
+
+        Takes exactly one snapshot of the published index; all arithmetic
+        below uses that single consistent value. The read length is clamped
+        to what the ring actually retains. Handles wrap-around by copying
+        two segments. Returns None when there is no settled audio yet.
         """
-        with self._write_lock:
-            write_pos = self.write_index % self.ring_size
+        published = self.write_index
+        channels = 1 if self.mono_mode else 2
+        block = self.buffer_size * channels
+        margin = READ_MARGIN_BLOCKS * block
 
-        # Calculate read position (sample_count behind write)
-        read_pos = (self.write_index - sample_count) % self.ring_size
+        usable = published - margin  # newest fully-settled sample count
+        if sample_count <= 0 or usable <= 0:
+            return None
+
+        # Clamp to what the ring actually retains, and keep the read arc
+        # away from the producer's in-flight block even under wrap-around:
+        # read region + margin + one block must fit inside the ring for the
+        # two regions to never overlap modulo ring_size.
+        read_len = min(sample_count, usable, self.ring_size - margin - block)
+        read_pos = (usable - read_len) % self.ring_size
 
         # Check if we need to handle wrap-around
-        if read_pos + sample_count <= self.ring_size:
+        if read_pos + read_len <= self.ring_size:
             # No wrap - single read
-            return self.ring_buffer[read_pos : read_pos + sample_count].copy()
+            return self.ring_buffer[read_pos : read_pos + read_len].copy()
         else:
             # Wrap around - read two segments and concatenate
             first_part = self.ring_size - read_pos
             segment1 = self.ring_buffer[read_pos:].copy()
-            segment2 = self.ring_buffer[: sample_count - first_part].copy()
+            segment2 = self.ring_buffer[: read_len - first_part].copy()
             return np.concatenate([segment1, segment2])
 
     def _should_attempt_recovery(self) -> bool:
@@ -496,13 +539,13 @@ class BeatDetector(QObject):
         # Close existing stream
         self._cleanup_stream()
 
-        # Clear ring buffer and reset indices
-        with self._write_lock:
-            self.ring_buffer.fill(0)
-            self.write_index = 0
-            self.total_samples_written = 0
-            self.last_callback_time = 0.0
-            logging.info("Cleared ring buffer for fresh start")
+        # Clear ring buffer and reset indices. Safe without a lock: the
+        # stream was closed above, so the producer (audio callback) is gone,
+        # and this runs on the analysis (consumer) thread itself.
+        self.ring_buffer.fill(0)
+        self.write_index = 0
+        self.last_callback_time = 0.0
+        logging.info("Cleared ring buffer for fresh start")
 
         # Wait for USB device to settle
         time.sleep(0.5)
