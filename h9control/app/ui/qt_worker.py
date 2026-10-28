@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from PySide6 import QtCore
 
+from h9control.app.bpm_sync import BpmSyncMixin, sanitize_live_bpm
 from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
@@ -85,7 +86,7 @@ class _PresetChangeDetector:
         return len(unique) >= 2
 
 
-class H9DeviceWorker(QtCore.QObject):
+class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
     state_changed = QtCore.Signal(object)
     preset_change_detected = QtCore.Signal()
 
@@ -554,109 +555,6 @@ class H9DeviceWorker(QtCore.QObject):
         )
         self._knob_overrides[name] = stored_raw
 
-    @QtCore.Slot(int)
-    def adjust_bpm(self, delta_bpm: int) -> None:
-        if self._transport is None:
-            self._connect()
-        if self._transport is None:
-            return
-
-        bpm_now = self._sanitize_bpm(self._last_state.bpm)
-        if bpm_now is None:
-            return
-
-        target = int(round(bpm_now)) + int(delta_bpm)
-        target = max(20, min(300, target))
-
-        try:
-            self._backend.set_bpm(target)
-            # Remember what we just sent so continuous auto-sync does not
-            # immediately clobber this manual value with the live BPM.
-            self._last_sent_auto_bpm = target
-        except Exception:
-            self._logger.exception("Failed to set BPM")
-            return
-
-        # Re-read state so UI stays in sync with the pedal.
-        self._refresh_state()
-
-    @QtCore.Slot()
-    def sync_live_bpm(self) -> None:
-        if self._transport is None:
-            self._connect()
-        if self._transport is None:
-            return
-
-        if self._live_bpm is None:
-            return
-
-        target = int(round(self._live_bpm))
-        target = max(20, min(300, target))
-
-        try:
-            self._backend.set_bpm(target)
-            self._last_sent_auto_bpm = target
-        except Exception:
-            self._logger.exception("Failed to set BPM")
-            return
-
-        # Re-read state so UI stays in sync with the pedal.
-        self._refresh_state()
-
-    def _check_auto_bpm_sync(self) -> int | None:
-        """Check if auto BPM sync should fire and send BPM if needed.
-
-        Returns the newly sent BPM value if successful, None otherwise.
-        """
-        if self._config.auto_bpm_mode != "continuous":
-            self._logger.debug(f"Auto BPM sync not in continuous mode, skipping")
-            return None
-
-        if self._live_bpm is None:
-            self._logger.debug(f"No live BPM available, skipping auto-sync")
-            return None
-
-        if self._transport is None:
-            self._logger.debug(f"Not connected, skipping auto-sync")
-            return None
-
-        rounded_bpm = int(round(self._live_bpm))
-
-        # Only send if the rounded value has changed
-        if rounded_bpm == self._last_sent_auto_bpm:
-            self._logger.debug(
-                f"Auto BPM sync: rounded BPM {rounded_bpm} unchanged, skipping"
-            )
-            return None
-
-        # Clamp to valid range
-        target = max(20, min(300, rounded_bpm))
-
-        try:
-            self._backend.set_bpm(target)
-            self._last_sent_auto_bpm = target
-            self._logger.info(f"Auto-synced BPM: {target}")
-            return target
-        except Exception:
-            self._logger.exception("Failed to auto-sync BPM")
-            return None
-
-    def _sanitize_bpm(self, bpm: float | None) -> float | None:
-        if bpm is None:
-            return self._last_good_bpm
-
-        # Guardrail: we have observed occasional bogus tempo reads.
-        if bpm < 20.0 or bpm > 300.0:
-            self._logger.debug(
-                "Ignoring implausible BPM reading: %s (last_good=%s)",
-                bpm,
-                self._last_good_bpm,
-            )
-            return self._last_good_bpm
-
-        self._last_good_bpm = bpm
-        return bpm
-
     @QtCore.Slot()
     def shutdown(self) -> None:
         # Stop the event-refresh timer first: it may still be armed from an
@@ -883,10 +781,7 @@ class H9DeviceWorker(QtCore.QObject):
 
     @QtCore.Slot(float)
     def update_live_bpm(self, bpm: float) -> None:
-        # The beat detector emits -1.0 as a "stream died" sentinel; treat
-        # any non-positive value as "no live BPM available" so the dashboard
-        # never renders it and auto-sync never clamps it to BPM 20.
-        live = bpm if bpm is not None and bpm > 0 else None
+        live = sanitize_live_bpm(bpm)
         if self._live_bpm == live:
             return
         self._live_bpm = live
