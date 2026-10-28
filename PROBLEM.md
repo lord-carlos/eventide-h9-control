@@ -7,15 +7,17 @@ will drift after edits — re-locate by code context, not line number.*
 
 ## Status (2026-10-28)
 
+Integration branch: **`feature/cleanup-segments`** (contains master + segments 1 & 2; not merged to master yet). New segment branches should cut from this branch.
+
 | Segment | Status |
 |---|---|
-| 1 — Worker bugs + split | ✅ Done — branch `segment-1-worker` (pending merge to master) |
-| 2 — MIDI transport | ✅ Done — branch `segment-2-midi` (pending merge to master) |
-| 3 — Audio / beat detection | ⬜ Open |
-| 4 — Config layer | ⬜ Open |
-| 5 — UI polish | ⬜ Open |
-| 6 — Protocol & validation | ⬜ Open |
-| 7 — Repo housekeeping | ⬜ Open |
+| 1 — Worker bugs + split | ✅ Done — merged into `feature/cleanup-segments` |
+| 2 — MIDI transport | ✅ Done — merged into `feature/cleanup-segments` |
+| 3 — Audio / beat detection | ⬜ Open (branch `segment-3-audio`) |
+| 4 — Config layer | ⬜ Open (branch `segment-4-config`) |
+| 5 — UI polish | ⬜ Queued — starts when an agent frees up. **Item 5.4 (tooltips) cancelled** — see "Not tracked" below |
+| 6 — Protocol & validation | ⬜ Open (branch `segment-6-protocol`) |
+| 7 — Repo housekeeping | ⬜ Queued — starts when an agent frees up |
 
 The work is split into **segments that do not touch each other**. Each segment
 lists exactly which files it is allowed to modify. Two agents / developers can
@@ -30,6 +32,8 @@ Rules:
     Any workaround for real hardware belongs in the owner's live config.
   - `/scripts/` directory — leave alone for now (this includes its imports of
     the root `midi.py`, see Segment 2's compat-shim note).
+  - UI tooltips (Segment 5.4 and similar) — this is a **touchscreen** app, not
+    mouse-driven. Do not add or improve tooltips anywhere.
 - Suggested order *within* a segment follows the numbering, but everything in
   a segment is independent of other segments.
 
@@ -219,10 +223,9 @@ every pixel of drag. Debounce ~200 ms (single-shot `QTimer`).
 `qt_dashboard.py` ~lines 756–767 resize only; the window ends up wherever the
 WM puts it (top-left). Call `window.move(avail.center() - window.rect().center())`.
 
-### 5.4 Status-dot tooltip shows status text only
-`qt_dashboard.py` ~line 637 sets the tooltip to the current status text. The
-dot is also the settings button (`.clicked.connect(settings_requested)` at
-~line 314) — append a hint like "· click to open settings" to the tooltip.
+### 5.4 ~~Status-dot tooltip shows status text only~~ — CANCELLED
+This app is a touchscreen UI, not mouse-driven; tooltips are not a useful
+discoverability mechanism here. Left out of scope by project decision.
 
 ---
 
