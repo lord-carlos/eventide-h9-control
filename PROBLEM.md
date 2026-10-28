@@ -5,19 +5,39 @@ will drift after edits — re-locate by code context, not line number.*
 
 ## How to use this document
 
-## Status (2026-10-28)
+## Status (updated 2026-10-28)
 
-Integration branch: **`feature/cleanup-segments`** (contains master + segments 1 & 2; not merged to master yet). New segment branches should cut from this branch.
+Integration branch: **`feature/cleanup-segments`** — contains all completed
+segments merged in (NOT merged to master yet). Combined suite: **183 passing**
+(was 132 at the start of the segment work; ~51 net new tests across segments).
 
 | Segment | Status |
 |---|---|
-| 1 — Worker bugs + split | ✅ Done — merged into `feature/cleanup-segments` |
-| 2 — MIDI transport | ✅ Done — merged into `feature/cleanup-segments` |
-| 3 — Audio / beat detection | ⬜ Open (branch `segment-3-audio`) |
-| 4 — Config layer | ⬜ Open (branch `segment-4-config`) |
-| 5 — UI polish | ⬜ Queued — starts when an agent frees up. **Item 5.4 (tooltips) cancelled** — see "Not tracked" below |
-| 6 — Protocol & validation | ⬜ Open (branch `segment-6-protocol`) |
-| 7 — Repo housekeeping | ⬜ Queued — starts when an agent frees up |
+| 1 — Worker bugs + split | ✅ Done — merged (`segment-1-worker`) |
+| 2 — MIDI transport | ✅ Done — merged (`segment-2-midi`) |
+| 3 — Audio / beat detection | ✅ Done — merged (`segment-3-audio`) |
+| 4 — Config layer | ✅ Done — merged (`segment-4-config`) |
+| 5 — UI polish | ✅ Done — merged (`segment-5-ui`; 5.4 tooltips cancelled) |
+| 6 — Protocol & validation | ✅ Done — merged (`segment-6-protocol`) |
+| 7 — Repo housekeeping | ✅ Done — merged (`segment-7-repo`; see follow-ups) |
+
+### Open follow-ups (need project-owner decision)
+
+1. **`thread.wait(2000)` in `ui_main.py` (~line 234)** — blocks the UI up to
+   2 s at app exit. Impact is now much smaller since Segment 1 removed the
+   blocking 300 ms sleeps during worker shutdown, but the cap is still there.
+   No segment owned `ui_main.py`. Small fix; ask for it or fold into a later
+   UI-touching change.
+2. **`pyproject.toml` has no `[build-system]`** — projects without one are
+   treated by uv as virtual, so the `[project.scripts]` entry points
+   (`h9-control`, `h9-control-cli`) are not installed into a fresh venv and
+   `uv run h9-control-cli` fails there (works fine with
+   `uv run python main.py`). Fix = add a build backend (e.g. hatchling) +
+   `[tool.uv] package = true`. Design choice — changing how uv treats the
+   project.
+3. **`ConfigManager.load_error`** (added in Segment 4) is not yet surfaced in
+   the settings UI — a warning banner in `qt_settings.py` would complete the
+   corrupted-config story (the file is preserved as `config.json.bak`).
 
 The work is split into **segments that do not touch each other**. Each segment
 lists exactly which files it is allowed to modify. Two agents / developers can
@@ -151,7 +171,7 @@ with `scripts/` (which is out of scope):
 
 ---
 
-## Segment 3 — Audio / beat detection
+## Segment 3 — Audio / beat detection — ✅ DONE (branch `segment-3-audio`)
 
 **Files:** `h9control/audio/beat_detector.py` only.
 
@@ -181,7 +201,7 @@ Fix: guard `len(self.selected_channels) < 2` → fall back to mono-duplication p
 
 ---
 
-## Segment 4 — Config layer
+## Segment 4 — Config layer — ✅ DONE (branch `segment-4-config`)
 
 **Files:** `h9control/app/config.py` only.
 
@@ -205,7 +225,7 @@ batch) and only write when content actually changed.
 
 ---
 
-## Segment 5 — UI polish (dashboard + settings)
+## Segment 5 — UI polish (dashboard + settings) — ✅ DONE (branch `segment-5-ui`, item 5.4 cancelled)
 
 **Files:** `h9control/app/ui/qt_dashboard.py`, `h9control/app/ui/qt_settings.py` only.
 
@@ -229,7 +249,7 @@ discoverability mechanism here. Left out of scope by project decision.
 
 ---
 
-## Segment 6 — Protocol & validation hardening
+## Segment 6 — Protocol & validation hardening — ✅ DONE (branch `segment-6-protocol`)
 
 **Files:** `h9control/protocol/sysex.py`, `h9control/domain/preset.py`, `h9control/protocol/h9_protocol.py`, `h9control/app/h9_backend.py`, `pyproject.toml` (dependency markers). *No* UI files.
 
@@ -268,7 +288,7 @@ graceful fallback).
 
 ---
 
-## Segment 7 — Repo housekeeping & entry points
+## Segment 7 — Repo housekeeping & entry points — ✅ DONE (branch `segment-7-repo`)
 
 **Files:** `main.py`, `test.py`, `ui_main.py`, `README.md`/docs cross-references. *Do not* touch `qt_worker.py` (Segment 1 owns it) or `scripts/`.
 
