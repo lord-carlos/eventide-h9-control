@@ -5,6 +5,18 @@ will drift after edits — re-locate by code context, not line number.*
 
 ## How to use this document
 
+## Status (2026-10-28)
+
+| Segment | Status |
+|---|---|
+| 1 — Worker bugs + split | ✅ Done — branch `segment-1-worker` (pending merge to master) |
+| 2 — MIDI transport | ✅ Done — branch `segment-2-midi` (pending merge to master) |
+| 3 — Audio / beat detection | ⬜ Open |
+| 4 — Config layer | ⬜ Open |
+| 5 — UI polish | ⬜ Open |
+| 6 — Protocol & validation | ⬜ Open |
+| 7 — Repo housekeeping | ⬜ Open |
+
 The work is split into **segments that do not touch each other**. Each segment
 lists exactly which files it is allowed to modify. Two agents / developers can
 work on different segments in parallel without merge conflicts.
@@ -28,7 +40,9 @@ compat shim to avoid conflicting with Segment 1) and the `qt_worker.py` split
 
 ---
 
-## Segment 1 — Worker (qt_worker.py) bugs + split
+## Segment 1 — Worker (qt_worker.py) bugs + split — ✅ DONE (branch `segment-1-worker`)
+
+*Taken off the open list.*
 
 **Files:** `h9control/app/ui/qt_worker.py`, new modules under `h9control/app/` (e.g. `bpm_sync.py`, `gpio_binding.py`, `knob_override.py`) if splitting.
 
@@ -43,7 +57,7 @@ files/functions. Natural seams:
 Do the fixes below first, then the split (or vice versa — but do one commit per
 step so the split is reviewable).
 
-### 1.1 Manual BPM adjust is overridden by auto-sync (not fixed)
+### 1.1 Manual BPM adjust is overridden by auto-sync
 `adjust_bpm` (~line 555) does **not** update `self._last_sent_auto_bpm`; only
 `sync_live_bpm` and `_check_auto_bpm_sync` do. In `auto_bpm_mode="continuous"`,
 every state publication calls `_check_auto_bpm_sync`, which immediately re-sends
@@ -101,7 +115,7 @@ refresh" instead of storing a value.
 
 ---
 
-## Segment 2 — MIDI transport (midi.py / H9Midi)
+## Segment 2 — MIDI transport (midi.py / H9Midi) — ✅ DONE (branch `segment-2-midi`)
 
 **Files:** `midi.py`, `h9control/transport/midi_transport.py`, and (import-only) `h9control/app/ui/qt_worker.py` line `from midi import H9Midi`. *No* other files.
 
