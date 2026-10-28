@@ -30,10 +30,12 @@ uv run python ui_main.py    # or: uv run h9-control
 Try it without an H9 connected, audio input, or GPIO:
 
 ```bash
-uv run python ui_main.py --simulate-h9 --no-audio --no-gpio
+uv run python ui_main.py --simulate-h9 --no-audio --no-gpio --no-config-save
 ```
 
-(`--simulate-h9` is also used by automated screenshot tooling.)
+(`--simulate-h9` is also used by automated screenshot tooling. Add
+`--no-config-save` for try-it/dev runs so simulated state — device fallbacks,
+lock toggles — is never written back to `config.json`.)
 
 Raspberry Pi: see `INSTALL_RASPBERRY_PI.md` — `linux/install.sh` sets up
 system dependencies and installs a systemd service that starts the dashboard

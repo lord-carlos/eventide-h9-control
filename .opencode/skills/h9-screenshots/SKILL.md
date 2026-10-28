@@ -16,8 +16,13 @@ Run this command from the repository root:
 uv run python ui_main.py --simulate-h9 --simulate-preset 0 \
     --screenshot artifacts/dashboard.png --exit-after-screenshot \
     --screenshot-width 1280 --screenshot-height 720 \
-    --no-audio --no-gpio --log-level INFO
+    --no-audio --no-gpio --no-config-save --log-level INFO
 ```
+
+Always include `--no-config-save` in simulated runs: they change in-memory
+state (device fallbacks, lock toggles) and without the flag the debounced
+config saver writes that state back to the committed `config.json`, dirtying
+the working tree.
 
 The command launches the real Qt dashboard, waits for the initial state, saves
 the dashboard content, and exits. Use `1280x720` for the production display.
@@ -42,7 +47,8 @@ Capture each state to a separate file when reviewing layout or typography:
 
 ```text
 uv run python ui_main.py --simulate-h9 --simulate-preset 1 \
-    --screenshot artifacts/warm-echo.png --exit-after-screenshot
+    --screenshot artifacts/warm-echo.png --exit-after-screenshot \
+    --no-config-save
 ```
 
 The fake device also supports preset navigation, BPM reads and writes, and
