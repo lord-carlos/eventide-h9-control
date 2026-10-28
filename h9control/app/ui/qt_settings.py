@@ -379,6 +379,13 @@ class SettingsWidget(QtWidgets.QWidget):
                 border-radius: 10px;
             }
         """)
+        # Debounce brightness writes: coalesce slider ticks into one sysfs
+        # write per drag instead of one per pixel of movement.
+        self._brightness_timer = QtCore.QTimer(self)
+        self._brightness_timer.setSingleShot(True)
+        self._brightness_timer.setInterval(250)
+        self._brightness_timer.timeout.connect(self._apply_pending_brightness)
+        self._pending_brightness: int | None = None
         self._brightness_slider.valueChanged.connect(self._on_brightness_changed)
 
         lbl_brightness = QtWidgets.QLabel("Brightness:")
@@ -654,7 +661,11 @@ class SettingsWidget(QtWidgets.QWidget):
             if self._backlight.is_available():
                 current = self._backlight.get_brightness_percent()
                 if current is not None:
+                    # Block signals so restoring the hardware value does not
+                    # schedule a redundant debounced write.
+                    slider_was_blocked = self._brightness_slider.blockSignals(True)
                     self._brightness_slider.setValue(current)
+                    self._brightness_slider.blockSignals(slider_was_blocked)
                 self._brightness_slider.setEnabled(True)
             else:
                 self._brightness_slider.setEnabled(False)
@@ -785,7 +796,15 @@ class SettingsWidget(QtWidgets.QWidget):
             self.settings_changed.emit()
 
     def _on_brightness_changed(self, value: int) -> None:
-        """Handle brightness slider change."""
+        """Store the pending brightness; it is written after a short pause."""
+        self._pending_brightness = value
+        self._brightness_timer.start()
+
+    def _apply_pending_brightness(self) -> None:
+        """Write the final brightness choice once (single debounced write)."""
+        if self._pending_brightness is None:
+            return
+        value, self._pending_brightness = self._pending_brightness, None
         if self._backlight.is_available():
             success = self._backlight.set_brightness_percent(value)
             if not success:

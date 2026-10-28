@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets
 
 from h9control.app.state import DashboardState, KnobBarState
-from h9control.app.ui.qt_dashboard import DashboardWidget
+from h9control.app.ui.qt_dashboard import DashboardWidget, fit_window_to_screen
 
 
 def test_dashboard_renders_raw_knob_value() -> None:
@@ -58,11 +58,46 @@ def test_dashboard_actions_remain_touchable() -> None:
 
     widget._btn_prev.click()
     widget._btn_next.click()
-    widget._btn_bpm.click()
     widget._lbl_live_bpm.click()
     widget._btn_settings.click()
 
-    assert actions == ["prev", "next", "refresh", "sync", "settings"]
+    assert actions == ["prev", "next", "sync", "settings"]
+    widget.deleteLater()
+    app.processEvents()
+
+
+def test_dashboard_bpm_tile_opens_bpm_adjust_popup() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    widget = DashboardWidget()
+    deltas: list[int] = []
+    refreshes: list[bool] = []
+    widget.adjust_bpm_requested.connect(deltas.append)
+    widget.connect_refresh_requested.connect(lambda: refreshes.append(True))
+
+    # Tapping the BPM tile opens the adjust popup instead of re-querying.
+    widget._btn_bpm.click()
+    popup = QtWidgets.QApplication.activePopupWidget()
+    assert isinstance(popup, QtWidgets.QMenu)
+
+    texts = [action.text() for action in popup.actions()]
+    assert texts == [
+        "-1 BPM",
+        "+1 BPM",
+        "-5 BPM",
+        "+5 BPM",
+        "",
+        "Refresh preset / BPM",
+    ]
+
+    for action in popup.actions():
+        if action.text():
+            action.trigger()
+
+    assert deltas == [-1, 1, -5, 5]
+    assert refreshes == [True]
+
+    popup.close()
+    popup.deleteLater()
     widget.deleteLater()
     app.processEvents()
 
@@ -115,3 +150,20 @@ def test_dashboard_surfaces_connection_errors() -> None:
     assert "#ed6a68" in widget._status_dot.styleSheet()
     widget.deleteLater()
     app.processEvents()
+
+
+def test_fit_window_to_screen_centers_window() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = QtWidgets.QWidget()
+
+    fit_window_to_screen(window)
+
+    screen = window.screen()
+    assert screen is not None
+    avail = screen.availableGeometry()
+    center = window.frameGeometry().center()
+    assert abs(center.x() - avail.center().x()) <= 1
+    assert abs(center.y() - avail.center().y()) <= 1
+    assert window.width() <= avail.width()
+    assert window.height() <= avail.height()
+    window.deleteLater()
