@@ -8,6 +8,8 @@ H9 itself.
 
 ## Features
 
+![Dashboard screenshot: the PRISTINE DIGITAL preset with delay and feedback knobs, BPM tiles and lock indicators](assets/dashboard.png)
+
 - Preset navigation plus five jump keys for direct preset access
 - Live BPM detection from an audio input
 - Locked BPM mode (send once to the H9) or continuous live BPM mode
