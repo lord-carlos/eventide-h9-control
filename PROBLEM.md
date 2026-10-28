@@ -21,23 +21,28 @@ segments merged in (NOT merged to master yet). Combined suite: **183 passing**
 | 6 — Protocol & validation | ✅ Done — merged (`segment-6-protocol`) |
 | 7 — Repo housekeeping | ✅ Done — merged (`segment-7-repo`; see follow-ups) |
 
-### Open follow-ups (need project-owner decision)
+### Open follow-ups (updated 2026-10-28)
 
-1. **`thread.wait(2000)` in `ui_main.py` (~line 234)** — blocks the UI up to
-   2 s at app exit. Impact is now much smaller since Segment 1 removed the
-   blocking 300 ms sleeps during worker shutdown, but the cap is still there.
-   No segment owned `ui_main.py`. Small fix; ask for it or fold into a later
-   UI-touching change.
-2. **`pyproject.toml` has no `[build-system]`** — projects without one are
-   treated by uv as virtual, so the `[project.scripts]` entry points
-   (`h9-control`, `h9-control-cli`) are not installed into a fresh venv and
-   `uv run h9-control-cli` fails there (works fine with
-   `uv run python main.py`). Fix = add a build backend (e.g. hatchling) +
-   `[tool.uv] package = true`. Design choice — changing how uv treats the
-   project.
-3. **`ConfigManager.load_error`** (added in Segment 4) is not yet surfaced in
-   the settings UI — a warning banner in `qt_settings.py` would complete the
-   corrupted-config story (the file is preserved as `config.json.bak`).
+1. **`thread.wait(2000)` in `ui_main.py` (~line 234)** — in-app exit blocks up to
+   2 s. **Wontfix (owner decision)**: the device is typically powered off by
+   pulling the plug, so the shutdown-wait cap adds little real-world harm to
+   offsets already sped up by Segment 1 (blocking sleeps removed). A tiny
+   shrink to ~500 ms can still be folded into any future `ui_main.py` change.
+2. **`pyproject.toml` build-system — ✅ Done** (branch `followup-packaging`):
+   hatchling build backend + `[tool.uv] package = true`; wheel now carries the
+   `h9control` package plus root `main.py`/`ui_main.py`, so `[project.scripts]`
+   (`h9-control`, `h9-control-cli`) install via `uv sync` ("not found" in fresh
+   venvs fixed; verified `h9-control-cli --help` resolves). `readme.md` renamed
+   to `README.md` so the case-sensitive Pi build matches the `readme =`
+   reference. **Pi action after pulling this branch: run `uv sync` once** so the
+   two console scripts materialize. `linux/start-app.sh` / systemd unit are
+   unaffected (they launch `uv run python ui_main.py` directly).
+3. **`ConfigManager.load_error` surfaced — ✅ Done** (branch
+   `followup-config-error`): a red status banner (reusing the settings page's
+   existing inline status-label pattern, shared `_apply_status` helper) shows
+   the load failure + `config.json.bak` preservation at the top of the settings
+   page; it silently stays hidden when the config loads cleanly, and re-checks
+   via `showEvent` on page reopen.
 
 The work is split into **segments that do not touch each other**. Each segment
 lists exactly which files it is allowed to modify. Two agents / developers can
