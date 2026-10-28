@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -106,13 +108,24 @@ class AppConfig:
 
 
 class ConfigManager:
+    _SAVE_DEBOUNCE_SECONDS = 0.75
+
     def __init__(self, config_path: Path | str = "config.json") -> None:
         self.config_path = Path(config_path)
         # Message of the last load failure (None if the current config loaded
         # cleanly). Intended to be surfaced by the settings dialog so a
         # corrupted config.json is not silently swallowed by the UI.
         self.load_error: str | None = None
+        # Save-batching state, guarded by _lock. Setters only mark the config
+        # dirty; request_save() schedules a single debounced flush so many
+        # toggles in quick succession result in one disk write.
+        self._lock = threading.RLock()
+        self._dirty = False
+        self._last_written: str | None = None
+        self._save_timer: threading.Timer | None = None
         self.config = self.load()
+        # Safety net so pending changes are not lost on a quick app exit.
+        atexit.register(self.flush)
 
     def load(self) -> AppConfig:
         if not self.config_path.exists():
@@ -209,12 +222,62 @@ class ConfigManager:
         except OSError as e:
             logging.error(f"Could not back up failing config file: {e}")
 
+    def _serialize(self) -> str:
+        return json.dumps(asdict(self.config), indent=4)
+
+    def _write_file(self, serialized: str) -> None:
+        with open(self.config_path, "w") as f:
+            f.write(serialized)
+
     def save(self) -> None:
+        """Write the config to disk immediately (skipping a no-change write)."""
+        with self._lock:
+            self._cancel_timer_locked()
+            self._write_locked()
+
+    def request_save(self) -> None:
+        """Mark the config dirty and schedule a single debounced save.
+
+        Every scheduled save is cancelled/replaced by the next call, so a burst
+        of setters writes the file only once, after the debounce interval.
+        """
+        with self._lock:
+            self._dirty = True
+            self._cancel_timer_locked()
+            timer = threading.Timer(self._SAVE_DEBOUNCE_SECONDS, self.flush)
+            timer.daemon = True
+            self._save_timer = timer
+        timer.start()
+
+    def flush(self) -> None:
+        """Persist pending changes now (no-op if nothing changed)."""
+        with self._lock:
+            self._cancel_timer_locked()
+            if not self._dirty:
+                return
+            self._write_locked()
+
+    def _write_locked(self) -> None:
+        # Caller must hold self._lock. Skips the write when the serialized
+        # content is identical to the last successful write.
+        serialized = self._serialize()
+        if serialized == self._last_written:
+            self._dirty = False
+            return
         try:
-            with open(self.config_path, "w") as f:
-                json.dump(asdict(self.config), f, indent=4)
+            self._write_file(serialized)
         except Exception as e:
             logging.error(f"Failed to save config: {e}")
+            self._dirty = True
+            return
+        self._last_written = serialized
+        self._dirty = False
+
+    def _cancel_timer_locked(self) -> None:
+        # Caller must hold self._lock.
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+            self._save_timer = None
 
     @property
     def audio_input_device_id(self) -> int | None:
@@ -223,7 +286,7 @@ class ConfigManager:
     @audio_input_device_id.setter
     def audio_input_device_id(self, value: int | None) -> None:
         self.config.audio.input_device_id = value
-        self.save()
+        self.request_save()
 
     @property
     def audio_input_channels(self) -> int:
@@ -232,7 +295,7 @@ class ConfigManager:
     @audio_input_channels.setter
     def audio_input_channels(self, value: int) -> None:
         self.config.audio.input_channels = value
-        self.save()
+        self.request_save()
 
     @property
     def auto_bpm_mode(self) -> str:
@@ -241,7 +304,7 @@ class ConfigManager:
     @auto_bpm_mode.setter
     def auto_bpm_mode(self, value: str) -> None:
         self.config.audio.auto_bpm_mode = value
-        self.save()
+        self.request_save()
 
     @property
     def audio_selected_channels(self) -> list[int]:
@@ -250,7 +313,7 @@ class ConfigManager:
     @audio_selected_channels.setter
     def audio_selected_channels(self, value: list[int]) -> None:
         self.config.audio.selected_channels = value
-        self.save()
+        self.request_save()
 
     @property
     def audio_min_bpm(self) -> float:
@@ -259,7 +322,7 @@ class ConfigManager:
     @audio_min_bpm.setter
     def audio_min_bpm(self, value: float) -> None:
         self.config.audio.min_bpm = value
-        self.save()
+        self.request_save()
 
     @property
     def audio_max_bpm(self) -> float:
@@ -268,7 +331,7 @@ class ConfigManager:
     @audio_max_bpm.setter
     def audio_max_bpm(self, value: float) -> None:
         self.config.audio.max_bpm = value
-        self.save()
+        self.request_save()
 
     @property
     def lock_delay(self) -> bool:
@@ -277,7 +340,7 @@ class ConfigManager:
     @lock_delay.setter
     def lock_delay(self, value: bool) -> None:
         self.config.lock_delay = value
-        self.save()
+        self.request_save()
 
     @property
     def lock_feedback(self) -> bool:
@@ -286,7 +349,7 @@ class ConfigManager:
     @lock_feedback.setter
     def lock_feedback(self, value: bool) -> None:
         self.config.lock_feedback = value
-        self.save()
+        self.request_save()
 
     @property
     def lock_pitch(self) -> bool:
@@ -295,7 +358,7 @@ class ConfigManager:
     @lock_pitch.setter
     def lock_pitch(self, value: bool) -> None:
         self.config.lock_pitch = value
-        self.save()
+        self.request_save()
 
     @property
     def knob_order(self) -> tuple[str, ...]:
@@ -304,7 +367,7 @@ class ConfigManager:
     @knob_order.setter
     def knob_order(self, value: tuple[str, ...]) -> None:
         self.config.knob_order = value
-        self.save()
+        self.request_save()
 
     @property
     def theme_mode(self) -> str:
@@ -313,4 +376,4 @@ class ConfigManager:
     @theme_mode.setter
     def theme_mode(self, value: str) -> None:
         self.config.theme_mode = value
-        self.save()
+        self.request_save()
