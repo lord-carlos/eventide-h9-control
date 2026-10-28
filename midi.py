@@ -52,6 +52,10 @@ class H9Midi:
 
         Returns the output port name.
         """
+        # Close any previously opened handles so repeated connect() calls
+        # don't leak orphaned open MIDI ports.
+        self.close()
+
         m = cast(Any, mido)
         outputs = m.get_output_names()
         output_name = next((name for name in outputs if name.startswith(self.device_prefix)), None)
@@ -99,6 +103,41 @@ class H9Midi:
 
         msg = mido.Message("sysex", data=data_list)
         self._out.send(msg)
+
+    def send_program_change(self, program: int, channel: int = 0) -> None:
+        """Send a MIDI Program Change message.
+
+        Args:
+            program: Program number (0-127)
+            channel: MIDI channel (0-15, 0-based as in mido)
+        """
+        if program < 0 or program > 127:
+            raise ValueError("program must be 0..127")
+        if channel < 0 or channel > 15:
+            raise ValueError("channel must be 0..15")
+        if self._out is None:
+            raise RuntimeError("MIDI output not connected. Call connect() first.")
+
+        self._out.send(mido.Message("program_change", program=program, channel=channel))
+
+    def send_control_change(self, control: int, value: int, channel: int = 0) -> None:
+        """Send a MIDI Control Change message.
+
+        Args:
+            control: CC number (0-127)
+            value: CC value (0-127)
+            channel: MIDI channel (0-15, 0-based as in mido)
+        """
+        if control < 0 or control > 127:
+            raise ValueError("control must be 0..127")
+        if value < 0 or value > 127:
+            raise ValueError("value must be 0..127")
+        if channel < 0 or channel > 15:
+            raise ValueError("channel must be 0..15")
+        if self._out is None:
+            raise RuntimeError("MIDI output not connected. Call connect() first.")
+
+        self._out.send(mido.Message("control_change", control=control, value=value, channel=channel))
 
     def receive_pending(self) -> list[mido.Message]:
         """Return any pending incoming MIDI messages (if input was opened)."""
