@@ -163,4 +163,55 @@ def test_default_shortcuts_have_expected_actions() -> None:
     keyboard = ShortcutsConfig.default().keyboard
     assert keyboard["sync_live_bpm"] == ["D"]
     assert keyboard["settings"] == ["S"]
-    assert len(keyboard) == 12
+    assert len(keyboard) == 20
+
+
+def test_default_shortcuts_cover_preset_navigation() -> None:
+    keyboard = ShortcutsConfig.default().keyboard
+    assert keyboard["next_preset"] == ["Right"]
+    assert keyboard["prev_preset"] == ["Left"]
+    assert keyboard["connect_refresh"] == ["F5"]
+    for index in range(1, 6):
+        assert keyboard[f"jump_to_preset_{index}"]
+
+    # No navigation key may collide with the knob/BPM/settings bindings.
+    navigation_keys: set[str] = set()
+    for action in (
+        "next_preset",
+        "prev_preset",
+        "connect_refresh",
+        *(f"jump_to_preset_{i}" for i in range(1, 6)),
+    ):
+        navigation_keys.update(keyboard[action])
+    previously_defined = {"1", "Q", "2", "W", "3", "E", "4", "R", "5", "T", "D", "S"}
+    assert not navigation_keys & previously_defined
+
+
+def test_corrupt_json_backed_up_and_reports_load_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    raw = "{not valid json!!"
+    path.write_text(raw)
+    manager = ConfigManager(path)
+    assert manager.config == AppConfig.default()
+    assert manager.load_error  # error message exposed for the UI
+    backup = path.with_suffix(".json.bak")
+    assert backup.exists()
+    assert backup.read_text() == raw
+
+
+def test_load_error_cleared_after_successful_load(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text("{broken")
+    manager = ConfigManager(path)
+    assert manager.load_error
+    path.write_text(json.dumps({"theme_mode": "dark"}))
+    reloaded = ConfigManager(path)
+    assert reloaded.load_error is None
+    assert reloaded.config.theme_mode == "dark"
+
+
+def test_clean_and_missing_configs_report_no_load_error(tmp_path: Path) -> None:
+    valid = tmp_path / "valid.json"
+    valid.write_text(json.dumps({"theme_mode": "dark"}))
+    assert ConfigManager(valid).load_error is None
+    assert ConfigManager(tmp_path / "missing.json").load_error is None

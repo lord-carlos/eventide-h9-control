@@ -74,6 +74,17 @@ class ShortcutsConfig:
                 "adjust_bpm_down": ["T"],
                 "sync_live_bpm": ["D"],
                 "settings": ["S"],
+                # Preset navigation / refresh defaults, matching the keys used
+                # in the example config.json (digits 1-5 are taken by the
+                # knob adjustments, so jumps use the Z/X/C/V/B row instead).
+                "next_preset": ["Right"],
+                "prev_preset": ["Left"],
+                "connect_refresh": ["F5"],
+                "jump_to_preset_1": ["Z"],
+                "jump_to_preset_2": ["X"],
+                "jump_to_preset_3": ["C"],
+                "jump_to_preset_4": ["V"],
+                "jump_to_preset_5": ["B"],
             },
             gpio={},
         )
@@ -97,6 +108,10 @@ class AppConfig:
 class ConfigManager:
     def __init__(self, config_path: Path | str = "config.json") -> None:
         self.config_path = Path(config_path)
+        # Message of the last load failure (None if the current config loaded
+        # cleanly). Intended to be surfaced by the settings dialog so a
+        # corrupted config.json is not silently swallowed by the UI.
+        self.load_error: str | None = None
         self.config = self.load()
 
     def load(self) -> AppConfig:
@@ -104,6 +119,7 @@ class ConfigManager:
             logging.info(
                 f"Config file not found at {self.config_path}, using defaults."
             )
+            self.load_error = None
             return AppConfig.default()
 
         try:
@@ -166,6 +182,7 @@ class ConfigManager:
                 knob_order = tuple(knob_order_list)
                 theme_mode = data.get("theme_mode", "system")
 
+                self.load_error = None
                 return AppConfig(
                     audio=audio_config,
                     shortcuts=shortcuts_config,
@@ -176,8 +193,21 @@ class ConfigManager:
                     theme_mode=theme_mode,
                 )
         except Exception as e:
-            logging.error(f"Failed to load config: {e}")
+            logging.error(f"Failed to load config from {self.config_path}: {e}")
+            self.load_error = str(e)
+            self._backup_corrupt_file()
             return AppConfig.default()
+
+    def _backup_corrupt_file(self) -> None:
+        """Preserve a failing config file as ``<name>.json.bak`` if possible."""
+        if not self.config_path.exists():
+            return
+        backup_path = self.config_path.with_suffix(".json.bak")
+        try:
+            backup_path.write_bytes(self.config_path.read_bytes())
+            logging.info(f"Preserved failing config as {backup_path}")
+        except OSError as e:
+            logging.error(f"Could not back up failing config file: {e}")
 
     def save(self) -> None:
         try:
