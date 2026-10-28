@@ -58,11 +58,46 @@ def test_dashboard_actions_remain_touchable() -> None:
 
     widget._btn_prev.click()
     widget._btn_next.click()
-    widget._btn_bpm.click()
     widget._lbl_live_bpm.click()
     widget._btn_settings.click()
 
-    assert actions == ["prev", "next", "refresh", "sync", "settings"]
+    assert actions == ["prev", "next", "sync", "settings"]
+    widget.deleteLater()
+    app.processEvents()
+
+
+def test_dashboard_bpm_tile_opens_bpm_adjust_popup() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    widget = DashboardWidget()
+    deltas: list[int] = []
+    refreshes: list[bool] = []
+    widget.adjust_bpm_requested.connect(deltas.append)
+    widget.connect_refresh_requested.connect(lambda: refreshes.append(True))
+
+    # Tapping the BPM tile opens the adjust popup instead of re-querying.
+    widget._btn_bpm.click()
+    popup = QtWidgets.QApplication.activePopupWidget()
+    assert isinstance(popup, QtWidgets.QMenu)
+
+    texts = [action.text() for action in popup.actions()]
+    assert texts == [
+        "-1 BPM",
+        "+1 BPM",
+        "-5 BPM",
+        "+5 BPM",
+        "",
+        "Refresh preset / BPM",
+    ]
+
+    for action in popup.actions():
+        if action.text():
+            action.trigger()
+
+    assert deltas == [-1, 1, -5, 5]
+    assert refreshes == [True]
+
+    popup.close()
+    popup.deleteLater()
     widget.deleteLater()
     app.processEvents()
 
