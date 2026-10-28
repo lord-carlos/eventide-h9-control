@@ -296,3 +296,55 @@ def test_save_synchronous_and_not_scheduled_by_debounce(tmp_path: Path) -> None:
     assert path.exists()
     assert manager._save_timer is None
     assert manager._dirty is False
+
+
+def test_autosave_disabled_keeps_disk_untouched_after_flush(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ConfigManager, "_SAVE_DEBOUNCE_SECONDS", 0.05)
+    path = tmp_path / "config.json"
+    raw = json.dumps({"theme_mode": "dark"})
+    path.write_text(raw)
+    manager = ConfigManager(path, autosave=False)
+
+    manager.theme_mode = "light"
+    manager.lock_delay = True
+    manager.audio_input_device_id = 7
+    # In-memory behavior is unchanged even though persistence is suppressed.
+    assert manager.theme_mode == "light"
+    manager.flush()
+    assert len(list(tmp_path.glob("*.json*"))) == 1  # no .bak written either
+    assert path.read_text() == raw
+
+
+def test_autosave_disabled_save_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path, autosave=False)
+    writes = _count_writes(monkeypatch)
+
+    manager.theme_mode = "dark"
+    manager.save()
+    assert not path.exists()
+    assert len(writes) == 0
+
+
+def test_autosave_disabled_never_schedules_debounce_timer(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path, autosave=False)
+
+    manager.theme_mode = "dark"
+    assert manager._dirty is False  # request_save does not mark the config dirty
+    assert manager._save_timer is None
+    time.sleep(0.15)  # any scheduled debounce write would have fired by now
+    assert not path.exists()
+
+
+def test_autosave_disabled_on_missing_file_keeps_file_absent(tmp_path: Path) -> None:
+    path = tmp_path / "missing.json"
+    manager = ConfigManager(path, autosave=False)
+    assert manager.config == AppConfig.default()
+    manager.audio_min_bpm = 75.0
+    manager.flush()
+    assert not path.exists()

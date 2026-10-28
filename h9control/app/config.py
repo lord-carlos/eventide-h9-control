@@ -110,8 +110,17 @@ class AppConfig:
 class ConfigManager:
     _SAVE_DEBOUNCE_SECONDS = 0.75
 
-    def __init__(self, config_path: Path | str = "config.json") -> None:
+    def __init__(
+        self,
+        config_path: Path | str = "config.json",
+        autosave: bool = True,
+    ) -> None:
         self.config_path = Path(config_path)
+        # When autosave is False (dev/sim/screenshot runs via --no-config-save),
+        # setters still update the in-memory config but nothing is ever written
+        # back to the config file: save()/flush() are disk-write no-ops and
+        # request_save() does not schedule timers.
+        self._autosave = autosave
         # Message of the last load failure (None if the current config loaded
         # cleanly). Intended to be surfaced by the settings dialog so a
         # corrupted config.json is not silently swallowed by the UI.
@@ -125,7 +134,8 @@ class ConfigManager:
         self._save_timer: threading.Timer | None = None
         self.config = self.load()
         # Safety net so pending changes are not lost on a quick app exit.
-        atexit.register(self.flush)
+        if self._autosave:
+            atexit.register(self.flush)
 
     def load(self) -> AppConfig:
         if not self.config_path.exists():
@@ -231,6 +241,8 @@ class ConfigManager:
 
     def save(self) -> None:
         """Write the config to disk immediately (skipping a no-change write)."""
+        if not self._autosave:
+            return
         with self._lock:
             self._cancel_timer_locked()
             self._write_locked()
@@ -241,6 +253,8 @@ class ConfigManager:
         Every scheduled save is cancelled/replaced by the next call, so a burst
         of setters writes the file only once, after the debounce interval.
         """
+        if not self._autosave:
+            return
         with self._lock:
             self._dirty = True
             self._cancel_timer_locked()
@@ -251,6 +265,8 @@ class ConfigManager:
 
     def flush(self) -> None:
         """Persist pending changes now (no-op if nothing changed)."""
+        if not self._autosave:
+            return
         with self._lock:
             self._cancel_timer_locked()
             if not self._dirty:

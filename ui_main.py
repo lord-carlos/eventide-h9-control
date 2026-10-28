@@ -91,6 +91,14 @@ def main() -> None:
         action="store_true",
         help="Do not initialize GPIO inputs (useful on development machines).",
     )
+    parser.add_argument(
+        "--no-config-save",
+        action="store_true",
+        help=(
+            "Do not write settings back to config.json "
+            "(use for dev/sim/screenshot runs)."
+        ),
+    )
     args = parser.parse_args()
 
     if args.exit_after_screenshot and args.screenshot is None:
@@ -106,7 +114,7 @@ def main() -> None:
 
     configure_logging(cli_level=args.log_level)
 
-    config = ConfigManager()
+    config = ConfigManager(autosave=not args.no_config_save)
 
     app = QtWidgets.QApplication([])
 
