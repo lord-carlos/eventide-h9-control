@@ -1,97 +1,69 @@
-The goal of the project is to have a minimal USB controller for the Eventide H9 FX unit.
+A minimal USB/MIDI controller for the Eventide H9: a touchscreen dashboard (built
+for a Raspberry Pi) for jumping straight between presets and keeping the H9's
+tempo in sync with live audio.
 
-I want to jump to specific presets.
-When I want an echo, I might want to jump from 1/1th to 1/8th note echo. Without the steps like 1/2th tripplet in between of the origianl app.
+The motivation: jumping directly between note divisions — e.g. from 1/1 to 1/8
+echo — without stepping through triplets and other in-between values, as on the
+H9 itself.
 
-## Documenation
-- H9 sysex messages: documentation/Eventide h9 141309_MIDISysexMessages.pdf
-- H9 Algorithm Guide: documentation/H9AlgorithmGuide+V12.pdf
+## Features
 
-## Todo
-- [x] Integrate live audio BPM detection.
-- [x] Display both H9 BPM and calculated BPM from live audio input. Maybe next to each other.
-- [x]Add a switch state, either locked BPM or continues live BPM calculation. If   locked, make a function to send the BPM to H9 one time.
-- [x] A setting menu, fullscreen. And a way to permanently save settings. Maybe just a json? In current dir or in home dir?
-- Control keys, they need to switch preests in normal view, but change settings in the setting menu.
-- Double / halv BPM.
-- add to config "ignore these notes" 
-- view for traktor
-- [ ] sometimes 9/16 is seen as 1/2
-- [ ] Bluetooth?
-- [x] implement other bpm detection algorithm.
-- table for min og max value, and what kind of values. See the other repo. 
-    - [x] DLY-X should always have the notes annotation
-    - [x] Feedback should have - to 110 annotation
-    - [ ] RelMix  Discrete 21 A10+B0 A10+B01 A10+B02 A10+B03 A10+B04 A10+B05 A10+B06 A10+B07 A10+B08 A10+B09 A10+B10 A09+B10 A08+B10 A07+B10 A06+B10 A05+B10 A04+B10 A03+B10 A02+B10 A01+B10 A00+B10
-    - [ ] Depth   Int     ""      0     10    1
-    - [ ] Speed   Float   Hz      0.00  5.01
-    - [x] Filter  Int     ""      -100  100   1
+- Preset navigation plus five jump keys for direct preset access
+- Live BPM detection from an audio input
+- Locked BPM mode (send once to the H9) or continuous live BPM mode
+- Adjust the four main knobs of the current preset
+- Settings stored in `config.json` (shortcuts, audio, knob order, locks)
+- GPIO buttons and rotary encoders on the Raspberry Pi
+- Built-in H9 simulator — try the dashboard without any hardware
 
+## Install & run
 
-## Notes
+Development (Windows/macOS), with [uv](https://docs.astral.sh/uv/):
 
-Effects I want to use:
-Done: `DIGDLY, FLTDLY, ULTRA.T`
-nein danke: `ROOM`
-maybe: `M-FLTR`
-
-## UI Dashboard (Qt / PySide6)
-
-A minimal dashboard intended for a Raspberry Pi touchscreen.
-
-- Run on Windows (dev): `uv run python ui_main.py`
-
-
-### Keyboard Shortcuts
-
-All keyboard shortcuts are configurable in `config.json`. Default bindings:
-
-- **Preset navigation**: `Left`/`Right` arrows or `P`/`N`
-- **Knob adjustment**: `1`/`Q` (DLY-A), `2`/`W` (DLY-B), `3`/`E` (FBK-A), `4`/`R` (FBK-B)
-- **BPM control**: `5`/`T` (+/- BPM), `D` (sync live BPM)
-- **Settings**: `S`
-
-
-### GPIO Hardware Buttons (Raspberry Pi)
-
-GPIO button support is available for Raspberry Pi hardware buttons.
-
-### Simulated H9 and Screenshots
-
-Run the dashboard without an H9 connected by using the in-memory simulated H9:
-
-```text
-uv run python ui_main.py --simulate-h9 --log-level DEBUG
+```bash
+uv sync
+uv run python ui_main.py    # or: uv run h9-control
 ```
 
-The simulator includes four deterministic presets. Use `--simulate-preset 0` through
-`--simulate-preset 3` to choose the initial preset.
+Try it without an H9 connected, audio input, or GPIO:
 
-Capture a fixed-size dashboard screenshot and exit automatically:
-
-```text
-uv run python ui_main.py --simulate-h9 --simulate-preset 0 \
-    --screenshot artifacts/dashboard.png --exit-after-screenshot \
-    --no-audio --no-gpio
+```bash
+uv run python ui_main.py --simulate-h9 --no-audio --no-gpio
 ```
 
-Screenshot mode captures the Qt dashboard content at 1180x840 pixels. Adjust the
-size with `--screenshot-width` and `--screenshot-height`, or change the wait time
-with `--screenshot-delay-ms`.
+(`--simulate-h9` is also used by automated screenshot tooling.)
 
-### CLI Utility (`main.py`)
+Raspberry Pi: see `INSTALL_RASPBERRY_PI.md` — `linux/install.sh` sets up
+system dependencies and installs a systemd service that starts the dashboard
+on boot.
 
-`python main.py` (or the installed `h9-control-cli` script) is a console utility
-for the H9: it connects over MIDI, dumps and prints the current preset snapshot
-(name, algorithm and knob values), then exits.
+## Keyboard shortcuts
 
-Flags:
+All bindings are configurable in `config.json` (`shortcuts.keyboard`).
+Defaults:
+
+| Keys | Action |
+|---|---|
+| `Left` / `Right` | Previous / next preset |
+| `Z` `X` `C` `V` `B` | Jump to preset 1–5 |
+| `1`–`4` / `Q`–`R` | Raise / lower the four main knobs (order set by `knob_order`) |
+| `5` / `T` | BPM up / down |
+| `D` | Sync live BPM to the H9 |
+| `S` | Settings |
+| `F5` | Connect / refresh |
+
+## CLI
+
+`python main.py` (or `uv run h9-control-cli`) connects over MIDI, dumps and
+prints the current preset snapshot, then exits.
 
 - `--log-level LEVEL` — verbosity (also via `H9_LOG_LEVEL` env var)
 - `--print-bpm` — also request and print the current BPM
 - `--next-preset` — send a Program Change to the next preset and re-dump it
 - `--midi-channel CHANNEL` — channel for the Program Change (0-15, default 0)
-- `--listen` — after the dump, keep listening and print every incoming MIDI
-  message until Ctrl-C
+- `--listen` — keep listening and print every incoming MIDI message until Ctrl-C
 
-The GUI entry point `h9-control` (from `ui_main.py`) is unchanged.
+## Documentation
+
+- H9 SysEx messages: `documentation/Eventide h9 141309_MIDISysexMessages.pdf`
+- H9 Algorithm Guide: `documentation/H9AlgorithmGuide+V12.pdf`
