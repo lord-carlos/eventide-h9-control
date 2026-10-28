@@ -78,3 +78,20 @@ uv run python ui_main.py --simulate-h9 --simulate-preset 0 \
 Screenshot mode captures the Qt dashboard content at 1180x840 pixels. Adjust the
 size with `--screenshot-width` and `--screenshot-height`, or change the wait time
 with `--screenshot-delay-ms`.
+
+### CLI Utility (`main.py`)
+
+`python main.py` (or the installed `h9-control-cli` script) is a console utility
+for the H9: it connects over MIDI, dumps and prints the current preset snapshot
+(name, algorithm and knob values), then exits.
+
+Flags:
+
+- `--log-level LEVEL` — verbosity (also via `H9_LOG_LEVEL` env var)
+- `--print-bpm` — also request and print the current BPM
+- `--next-preset` — send a Program Change to the next preset and re-dump it
+- `--midi-channel CHANNEL` — channel for the Program Change (0-15, default 0)
+- `--listen` — after the dump, keep listening and print every incoming MIDI
+  message until Ctrl-C
+
+The GUI entry point `h9-control` (from `ui_main.py`) is unchanged.
