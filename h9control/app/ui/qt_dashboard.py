@@ -798,3 +798,7 @@ def fit_window_to_screen(
     width = min(preferred.width(), avail.width())
     height = min(preferred.height(), avail.height())
     window.resize(QtCore.QSize(width, height))
+    # Center on the screen the window opened on: move() places the frame
+    # top-left, so subtracting the frame center from the screen center yields
+    # exactly that position.
+    window.move(avail.center() - window.frameGeometry().center())

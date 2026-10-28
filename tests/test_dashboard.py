@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets
 
 from h9control.app.state import DashboardState, KnobBarState
-from h9control.app.ui.qt_dashboard import DashboardWidget
+from h9control.app.ui.qt_dashboard import DashboardWidget, fit_window_to_screen
 
 
 def test_dashboard_renders_raw_knob_value() -> None:
@@ -150,3 +150,20 @@ def test_dashboard_surfaces_connection_errors() -> None:
     assert "#ed6a68" in widget._status_dot.styleSheet()
     widget.deleteLater()
     app.processEvents()
+
+
+def test_fit_window_to_screen_centers_window() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = QtWidgets.QWidget()
+
+    fit_window_to_screen(window)
+
+    screen = window.screen()
+    assert screen is not None
+    avail = screen.availableGeometry()
+    center = window.frameGeometry().center()
+    assert abs(center.x() - avail.center().x()) <= 1
+    assert abs(center.y() - avail.center().y()) <= 1
+    assert window.width() <= avail.width()
+    assert window.height() <= avail.height()
+    window.deleteLater()
