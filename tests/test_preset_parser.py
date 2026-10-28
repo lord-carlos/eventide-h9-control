@@ -80,6 +80,33 @@ def test_fallback_to_category_index_when_name_missing() -> None:
     assert "FILTER" in preset.knobs_by_name
 
 
+def test_shimmr_dump_maps_all_algorithm_knobs_by_name() -> None:
+    preset = parse_preset_dump_text(
+        _dump(
+            "[8] 11 2 4",
+            "b 1000 2000 3000 4000 5000 6000 7000 4000 5000 6000 7F",
+            "C_X",
+            "SHIMMR",
+            "ETHEREAL",
+        )
+    )
+
+    assert preset.algorithm_key == "SHIMMR"
+    assert preset.knobs_by_name is not None
+    assert list(preset.knobs_by_name) == [
+        "MIDDCY",
+        "PITCH",
+        "PICH-B",
+        "PICH-A",
+        "HI-DCY",
+        "LO-DCY",
+        "DELAY",
+        "SIZE",
+        "DECAY",
+        "MIX",
+    ]
+
+
 def test_fallback_uses_hex_effect_number_when_header_index_out_of_range() -> None:
     preset = parse_preset_dump_text(_dump("[1] 12 2 2", "6 2600 3600 4200 3000 5200 4800 3000 2400 4000 5000 7F"))
 
