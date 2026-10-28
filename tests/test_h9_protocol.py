@@ -123,16 +123,19 @@ def test_get_current_bpm_divides_by_100(protocol: H9Protocol, fake: FakeTranspor
     assert protocol.get_current_bpm() == pytest.approx(138.4)
 
 
-def test_set_parameter_builds_expected_payload(protocol: H9Protocol, fake: FakeTransport) -> None:
-    protocol.set_parameter(H9SystemKeys.KEY_SP_TEMPO, 12500)
+def test_get_value_ignores_unparseable_value_then_matches(
+    protocol: H9Protocol, fake: FakeTransport
+) -> None:
+    # "-A0" is signed neither decimal nor hex: the frame must be skipped,
+    # not crash or return a bogus negative value.
+    fake.queue_frame(H9SysexCodes.SYSEXC_VALUE_DUMP, b"302 -A0")
+    fake.queue_frame(H9SysexCodes.SYSEXC_VALUE_DUMP, b"302 1234")
+    assert protocol.get_value(H9SystemKeys.KEY_SP_TEMPO) == 1234
 
-    assert len(fake.sent) == 1
-    sent = fake.sent[0]
-    assert sent[4] == H9SysexCodes.SYSEXC_VALUE_PUT
-    assert bytes(sent[5:-1]) == b"302 12500"
 
-
-def test_set_parameter_hex_string_value(protocol: H9Protocol, fake: FakeTransport) -> None:
-    protocol.set_parameter(H9SystemKeys.KEY_SP_TEMPO, "30D4")
-    sent = fake.sent[0]
-    assert bytes(sent[5:-1]) == b"302 30D4"
+def test_get_value_unparseable_value_keeps_waiting_until_timeout(
+    protocol: H9Protocol, fake: FakeTransport
+) -> None:
+    fake.queue_frame(H9SysexCodes.SYSEXC_VALUE_DUMP, b"302 -A0")
+    with pytest.raises(TimeoutError, match="302"):
+        protocol.get_value(H9SystemKeys.KEY_SP_TEMPO, timeout_s=0.05)

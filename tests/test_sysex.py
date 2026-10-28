@@ -9,6 +9,7 @@ from h9control.protocol.sysex import (
     SysexFrame,
     build_eventide_sysex,
     decode_eventide_sysex,
+    decode_eventide_value,
     format_sysex_bytes,
 )
 
@@ -33,6 +34,71 @@ def test_build_eventide_sysex_rejects_invalid_device_id(device_id: int) -> None:
 def test_build_eventide_sysex_rejects_invalid_command(command: int) -> None:
     with pytest.raises(ValueError):
         build_eventide_sysex(1, command)
+
+
+def test_build_eventide_sysex_rejects_non_7bit_command() -> None:
+    with pytest.raises(ValueError, match="command"):
+        build_eventide_sysex(1, 0x80)
+
+
+def test_build_eventide_sysex_rejects_non_7bit_device_id() -> None:
+    with pytest.raises(ValueError, match="device_id"):
+        build_eventide_sysex(0x80, 0x2D)
+
+
+@pytest.mark.parametrize("byte", [-1, 0x80, 0xFF])
+def test_build_eventide_sysex_rejects_non_7bit_payload(byte: int) -> None:
+    with pytest.raises(ValueError):
+        build_eventide_sysex(1, 0x2D, bytes([0x30, byte]))
+
+
+def test_build_eventide_sysex_names_offending_payload_byte() -> None:
+    with pytest.raises(ValueError, match="payload byte at index 1 is 0x80"):
+        build_eventide_sysex(1, 0x2D, bytes([0x30, 0x80]))
+
+
+def test_build_eventide_sysex_rejects_invalid_byte_in_bytearray_payload() -> None:
+    with pytest.raises(ValueError, match="index 0"):
+        build_eventide_sysex(1, 0x2D, bytearray([0xFF]))
+
+
+# --- decode_eventide_value ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("12500", 12500),  # digits-only -> decimal, even though valid hex
+        ("0", 0),
+        ("13840", 13840),
+        ("-5", -5),
+        ("-100", -100),
+        ("30D4", 12500),  # uppercase hex
+        ("30d4", 12500),  # lowercase hex
+        ("A", 10),
+        ("7F", 127),
+    ],
+)
+def test_decode_eventide_value(text: str, expected: int) -> None:
+    assert decode_eventide_value(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",  # empty
+        "-A0",  # sign on hex token: malformed, not negative hex
+        "+3",
+        "0x30",  # explicit hex prefix not accepted
+        "12 34",
+        "12G4",
+        "prop",
+        "30\x00",
+    ],
+)
+def test_decode_eventide_value_rejects_malformed(text: str) -> None:
+    with pytest.raises(ValueError, match="Cannot parse Eventide value"):
+        decode_eventide_value(text)
 
 
 def test_decode_eventide_sysex_round_trip() -> None:

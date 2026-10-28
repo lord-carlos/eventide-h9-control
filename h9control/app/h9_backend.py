@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from h9control.protocol.codes import H9SysexCodes, H9SystemKeys
-from h9control.protocol.sysex import SysexFrame
+from h9control.protocol.sysex import SysexFrame, decode_eventide_value
 
 
 class H9Backend:
@@ -56,9 +56,9 @@ class H9Backend:
             raise ValueError(f"Unexpected VALUE_DUMP payload: {text!r}")
 
         value_part = parts[1]
-        if value_part.lstrip("-").isdigit():
-            return int(value_part, 10)
-        return int(value_part, 16)
+        # Shared decimal-vs-hex heuristic (protocol/sysex.py). Raises
+        # ValueError with a clear message for malformed values like "-A0".
+        return decode_eventide_value(value_part)
 
     def set_value(self, key: int, value: int | str) -> None:
         # key:X formats the key as hex (e.g., 770 -> '302')
