@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -125,6 +126,10 @@ class ConfigManager:
         # cleanly). Intended to be surfaced by the settings dialog so a
         # corrupted config.json is not silently swallowed by the UI.
         self.load_error: str | None = None
+        # Message of the last save failure (None if the last write succeeded).
+        # Changes stay in memory and are retried, so this is advisory: the
+        # settings dialog shows it so a failing disk is not silently swallowed.
+        self.save_error: str | None = None
         # Save-batching state, guarded by _lock. Setters only mark the config
         # dirty; request_save() schedules a single debounced flush so many
         # toggles in quick succession result in one disk write.
@@ -138,6 +143,7 @@ class ConfigManager:
             atexit.register(self.flush)
 
     def load(self) -> AppConfig:
+        self._remove_stale_temp_file()
         if not self.config_path.exists():
             logging.info(
                 f"Config file not found at {self.config_path}, using defaults."
@@ -235,9 +241,72 @@ class ConfigManager:
     def _serialize(self) -> str:
         return json.dumps(asdict(self.config), indent=4)
 
+    def _temp_path(self) -> Path:
+        """Sibling temp file used for atomic writes.
+
+        It must live in the same directory as ``config_path`` so that
+        ``os.replace`` is an atomic rename within one filesystem.
+        """
+        return self.config_path.with_name(self.config_path.name + ".tmp")
+
+    def _remove_stale_temp_file(self) -> None:
+        """Delete a temp file left behind by an interrupted save.
+
+        A crash between writing the temp file and ``os.replace`` can leave one
+        behind. It is never a valid config, so dropping it is always safe.
+        """
+        temp_path = self._temp_path()
+        try:
+            temp_path.unlink()
+        except OSError:
+            return
+        logging.debug(f"Removed stale config temp file {temp_path}")
+
     def _write_file(self, serialized: str) -> None:
-        with open(self.config_path, "w") as f:
-            f.write(serialized)
+        """Write ``serialized`` atomically: temp file, fsync, then replace.
+
+        A crash can therefore never leave a half-written config.json behind;
+        the previous file stays intact until the rename succeeds.
+        """
+        temp_path = self._temp_path()
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(serialized)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.config_path)
+        except Exception:
+            # Best effort: do not leave a partial temp file behind.
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
+        self._fsync_directory()
+
+    def _fsync_directory(self) -> None:
+        """Flush the rename to disk so it survives a power cut (POSIX only).
+
+        Windows cannot open a directory handle, and the rename is already
+        durable enough there, so this is skipped. Failures are advisory.
+        """
+        if os.name == "nt":
+            return
+        directory = self.config_path.parent
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+        except OSError as e:
+            logging.debug(f"Could not open config directory for fsync: {e}")
+            return
+        try:
+            os.fsync(dir_fd)
+        except OSError as e:
+            logging.debug(f"Could not fsync config directory: {e}")
+        finally:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
 
     def save(self) -> None:
         """Write the config to disk immediately (skipping a no-change write)."""
@@ -284,8 +353,12 @@ class ConfigManager:
             self._write_file(serialized)
         except Exception as e:
             logging.error(f"Failed to save config: {e}")
+            # Keep the change in memory and the config dirty so the next
+            # flush retries; the UI shows save_error so the failure is visible.
+            self.save_error = str(e)
             self._dirty = True
             return
+        self.save_error = None
         self._last_written = serialized
         self._dirty = False
 
