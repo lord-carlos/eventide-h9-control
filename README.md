@@ -18,6 +18,15 @@ H9 itself.
 - GPIO buttons and rotary encoders on the Raspberry Pi
 - Built-in H9 simulator — try the dashboard without any hardware
 
+### Reliability
+
+- Retries the MIDI connection while the H9 is absent or unplugged, and resyncs
+  whatever preset is actually on the pedal when it reappears
+- Retries the audio input when the interface is missing at startup or replugged
+  mid-session, so it recovers without a restart
+- Writes settings atomically, so pulling the power mid-save cannot leave
+  `config.json` half-written, and reports a failed save in Settings
+
 ## Install & run
 
 Development (Windows/macOS), with [uv](https://docs.astral.sh/uv/):
