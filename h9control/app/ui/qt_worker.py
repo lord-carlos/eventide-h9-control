@@ -1162,10 +1162,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                     exc,
                     exc_info=True,
                 )
-                # Release the worker thread *now*: it may be blocked in
-                # `_wait_for_frame` and a queued slot cannot preempt it.
-                self._cancel_waiters(RuntimeError("Disconnected"))
-                self._connection_lost.emit(str(exc))
+                self._report_rx_failure(connection_id, stop_event, str(exc))
                 break
 
             has_traffic = bool(msgs)
@@ -1192,8 +1189,9 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                     connection_id,
                     self._device_prefix,
                 )
-                self._cancel_waiters(RuntimeError("Disconnected"))
-                self._connection_lost.emit("MIDI port disappeared")
+                self._report_rx_failure(
+                    connection_id, stop_event, "MIDI port disappeared"
+                )
                 break
 
             with self._waiters_lock:
@@ -1206,6 +1204,33 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                 _RX_BUSY_SLEEP_S if (has_traffic or await_frame) else _RX_IDLE_SLEEP_S
             )
         self._logger.info("RX loop stopped (connection_id=%d)", connection_id)
+
+    def _report_rx_failure(
+        self,
+        connection_id: int,
+        stop_event: threading.Event,
+        reason: str,
+    ) -> None:
+        """Report an RX fault only when it belongs to the current connection.
+
+        A thread from a previous connection can still raise while it is being
+        torn down (its transport is closed underneath it). If that report
+        reached the worker it would cancel the *new* connection's waiters or
+        tear the new connection down, so stale reports are dropped.
+        """
+        if stop_event.is_set() or connection_id != self._connection_id:
+            self._logger.debug(
+                "Ignoring RX failure from stale connection "
+                "(connection_id=%d, current=%d)",
+                connection_id,
+                self._connection_id,
+            )
+            return
+
+        # Release the worker thread *now*: it may be blocked in
+        # `_wait_for_frame` and a queued slot cannot preempt it.
+        self._cancel_waiters(RuntimeError("Disconnected"))
+        self._connection_lost.emit(reason)
 
     def _port_still_present(self, transport: H9Transport) -> bool:
         """Check port presence at most every `_PORT_CHECK_INTERVAL_S`."""

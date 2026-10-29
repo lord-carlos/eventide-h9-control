@@ -8,6 +8,7 @@ isActive) instead of being allowed to fire.
 from __future__ import annotations
 
 import os
+import threading
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -236,6 +237,41 @@ def test_rx_failure_cancels_waiters_and_reports_loss(harness: Harness) -> None:
     assert worker._last_state.preset_name == "PRISTINE DIGITAL"
     assert worker._transport is None
     assert worker._supervisor_timer.isActive()
+
+
+def test_stale_rx_failure_does_not_touch_the_new_connection(
+    harness: Harness,
+) -> None:
+    worker = harness.worker
+    assert worker._attempt_connect() is True
+    stale_generation = worker._connection_id
+
+    # Simulate a reconnect: the old RX thread is gone but a late fault from it
+    # still arrives (its transport was closed underneath it).
+    worker._teardown_connection()
+    worker._connection_id += 1
+    waiter = _register_waiter(worker)
+
+    worker._report_rx_failure(stale_generation, threading.Event(), "USB unplugged")
+
+    assert worker._connection_state is ConnectionState.CONNECTED
+    assert worker._last_state.connected is True
+    assert waiter in worker._waiters
+    waiter.raise_if_cancelled()  # must not raise
+
+
+def test_rx_failure_after_stop_event_is_ignored(harness: Harness) -> None:
+    worker = harness.worker
+    assert worker._attempt_connect() is True
+    waiter = _register_waiter(worker)
+
+    stopped = threading.Event()
+    stopped.set()
+    worker._report_rx_failure(worker._connection_id, stopped, "closed")
+
+    assert worker._connection_state is ConnectionState.CONNECTED
+    assert waiter in worker._waiters
+    waiter.raise_if_cancelled()  # must not raise
 
 
 def test_port_presence_check_is_throttled_and_detects_loss(harness: Harness) -> None:
