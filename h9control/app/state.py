@@ -23,7 +23,10 @@ class DashboardState:
     bpm: float | None = None
     live_bpm: float | None = None
 
+    # Dashboard slots (the configured subset, usually four knobs).
     knobs: tuple[KnobBarState, ...] = ()
+    # Every knob of the current algorithm, in hardware/CC order.
+    all_knobs: tuple[KnobBarState, ...] = ()
     lock_delay: bool = False
     lock_feedback: bool = False
     lock_pitch: bool = False
