@@ -262,6 +262,41 @@ def test_bpm_loss_is_signalled_once_per_outage(
     assert emitted == [-1.0, -1.0]
 
 
+def test_bpm_loss_is_signalled_before_the_backoff_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    detector: BeatDetector,
+) -> None:
+    install_fake_sd(monkeypatch, [USB_DEVICE])
+    events: list[tuple[str, object]] = []
+    detector.bpm = 128.0
+    detector.bpm_detected.connect(lambda value: events.append(("emit", value)))
+    monkeypatch.setattr(detector, "_start_stream", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        detector._stop_event,
+        "wait",
+        lambda timeout=None: events.append(("wait", timeout)) or True,
+    )
+
+    assert detector._attempt_recovery() is False
+    assert events[0] == ("emit", -1.0)
+
+
+def test_start_clears_stale_recovery_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    detector: BeatDetector,
+    fast_loop: None,
+) -> None:
+    install_fake_sd(monkeypatch, [USB_DEVICE])
+    detector._needs_recovery = True
+
+    detector.start()
+    try:
+        assert detector._needs_recovery is False
+        assert detector.status_text == "Listening"
+    finally:
+        detector.stop()
+
+
 def test_resolve_saved_identity_follows_reordered_devices(
     monkeypatch: pytest.MonkeyPatch,
     detector: BeatDetector,

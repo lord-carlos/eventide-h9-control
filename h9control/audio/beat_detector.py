@@ -267,6 +267,7 @@ class BeatDetector(QObject):
 
         self.running = True
         self._stop_event.clear()
+        self._needs_recovery = False
         self.recovery_attempts = 0
         self.callback_stall_count = 0
         self._bpm_loss_cleared = False
@@ -522,15 +523,18 @@ class BeatDetector(QObject):
         logging.error(
             f"Audio stream recovery attempt {attempt_num} (waiting {delay}s)"
         )
-        if self._stop_event.wait(delay):
-            return False
 
-        # Tell the worker the live BPM is gone - once per loss, not per retry.
-        # The stabilizer keeps its last value so a tempo is confirmed normally
-        # after recovery.
+        # Tell the worker the live BPM is gone *before* the backoff wait: the
+        # dashboard must stop showing (and continuous auto-sync must stop
+        # sending) a stale tempo as soon as the stream is known to be dead.
+        # Emitted once per loss, not per retry. The stabilizer keeps its last
+        # value so a tempo is confirmed normally after recovery.
         if self.bpm > 0 and not self._bpm_loss_cleared:
             self.bpm_detected.emit(-1.0)
             self._bpm_loss_cleared = True
+
+        if self._stop_event.wait(delay):
+            return False
 
         # Close existing stream
         self._cleanup_stream()
