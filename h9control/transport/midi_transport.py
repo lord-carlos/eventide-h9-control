@@ -27,6 +27,8 @@ class H9Transport(Protocol):
 
     def send_control_change(self, control: int, value: int, channel: int = 0) -> None: ...
 
+    def is_port_present(self) -> bool: ...
+
 
 @dataclass(frozen=True)
 class ConnectionInfo:
@@ -53,6 +55,10 @@ class MidiTransport:
     def close(self) -> None:
         logger.info("Closing MIDI transport")
         self._midi.close()
+
+    def is_port_present(self) -> bool:
+        """Return True while a matching H9 MIDI output port is available."""
+        return self._midi.is_port_present()
 
     def send_sysex(self, framed_or_unframed: Sequence[int] | bytes | bytearray) -> None:
         try:

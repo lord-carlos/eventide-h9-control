@@ -8,12 +8,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+import logging
 from typing import Optional
 from typing import Any, cast
 
 import mido
 
 __all__ = ["MidiPorts", "H9Midi"]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -75,21 +78,51 @@ class H9Midi:
 
         self._out = m.open_output(output_name)
 
-        if self.input_enabled:
-            inputs = m.get_input_names()
-            input_name = next((name for name in inputs if name.startswith(self.device_prefix)), None)
-            if input_name is not None:
-                self._in = m.open_input(input_name)
+        try:
+            if self.input_enabled:
+                inputs = m.get_input_names()
+                input_name = next((name for name in inputs if name.startswith(self.device_prefix)), None)
+                if input_name is not None:
+                    self._in = m.open_input(input_name)
+        except Exception:
+            # Don't leak the output handle when the input side fails to open.
+            self.close()
+            raise
 
         return output_name
 
+    def is_port_present(self) -> bool:
+        """Return True if an output port matching `device_prefix` is currently available.
+
+        Port enumeration is not cached: the device can appear/disappear at any
+        time (USB hotplug). Enumeration failures are reported as "absent".
+        """
+        try:
+            outputs = cast(Any, mido).get_output_names()
+        except Exception:
+            logger.debug("Failed to enumerate MIDI output ports", exc_info=True)
+            return False
+
+        return any(name.startswith(self.device_prefix) for name in outputs)
+
     def close(self) -> None:
-        if self._in is not None:
-            self._in.close()
-            self._in = None
-        if self._out is not None:
-            self._out.close()
-            self._out = None
+        """Close both handles, independently and without raising.
+
+        Safe to call repeatedly; callers use this during teardown/shutdown.
+        """
+        self._close_port("input", self._in)
+        self._close_port("output", self._out)
+        self._in = None
+        self._out = None
+
+    @staticmethod
+    def _close_port(kind: str, port: Optional[mido.ports.BasePort]) -> None:
+        if port is None:
+            return
+        try:
+            port.close()
+        except Exception:
+            logger.warning("Failed to close MIDI %s port", kind, exc_info=True)
 
     def send_sysex(self, data: Sequence[int] | bytes | bytearray) -> None:
         """Send a SysEx message.
