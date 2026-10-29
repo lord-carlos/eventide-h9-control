@@ -52,6 +52,9 @@ class FakeH9Transport:
         # Swallow requests so the worker times out.
         self.drop_program_want = False
         self.drop_value_want = False
+        # Fail only a specific command's send (e.g. VALUE_WANT), simulating a
+        # device that dies between the program dump and the tempo read.
+        self.command_error: tuple[int, Exception] | None = None
         self.sent_commands: list[int] = []
 
     def close(self) -> None:
@@ -78,6 +81,12 @@ class FakeH9Transport:
         frame = decode_eventide_sysex(mido.Message("sysex", data=data))
         assert frame is not None
         self.sent_commands.append(frame.command)
+
+        if (
+            self.command_error is not None
+            and frame.command == self.command_error[0]
+        ):
+            raise self.command_error[1]
 
         if frame.command == H9SysexCodes.SYSEXC_TJ_PROGRAM_WANT and self.drop_program_want:
             return
@@ -501,6 +510,45 @@ def test_bpm_unavailable_note_without_last_good_bpm(harness: Harness) -> None:
     assert state.connected is True
     assert state.status_text == "Connected (BPM unavailable)"
     assert state.bpm is None
+
+
+def test_bpm_read_is_retried_once_when_the_reply_is_dropped(
+    harness: Harness,
+) -> None:
+    worker = harness.worker
+    assert worker._attempt_connect() is True
+    transport = harness.transport
+    transport.sent_commands.clear()
+    transport.drop_value_want = True
+
+    worker._refresh_state()
+
+    assert transport.sent_commands.count(H9SysexCodes.SYSEXC_VALUE_WANT) == 2
+    assert worker._last_state.connected is True
+
+
+def test_bpm_send_failure_takes_loss_without_republishing_connected(
+    harness: Harness,
+) -> None:
+    worker = harness.worker
+    assert worker._attempt_connect() is True
+    transport = harness.transport
+    transport.sent_commands.clear()
+    states = []
+    worker.state_changed.connect(states.append)
+    transport.command_error = (
+        H9SysexCodes.SYSEXC_VALUE_WANT,
+        RuntimeError("USB write failed"),
+    )
+
+    worker._refresh_state()
+
+    # No second send: the handle is already gone.
+    assert transport.sent_commands.count(H9SysexCodes.SYSEXC_VALUE_WANT) == 1
+    assert worker._transport is None
+    assert worker._connection_state is ConnectionState.RECONNECTING
+    assert states[-1].connected is False
+    assert states[-1].status_text.startswith("Disconnected:")
 
 
 def test_send_failure_takes_loss_path(harness: Harness) -> None:

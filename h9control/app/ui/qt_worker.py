@@ -42,8 +42,10 @@ _PRESET_SETTLE_MS = 300
 _PROGRAM_DUMP_TIMEOUT_S = 2.0
 _BPM_TIMEOUT_S = 1.0
 
-# The program dump is a read, so it may be re-requested once on timeout.
+# The program dump and the tempo read are both reads, so each may be
+# re-requested once on timeout. Relative commands and VALUE_PUT never are.
 _PROGRAM_DUMP_ATTEMPTS = 2
+_BPM_ATTEMPTS = 2
 
 # How often the RX thread checks (while idle) that the MIDI port still exists.
 _PORT_CHECK_INTERVAL_S = 3.0
@@ -867,6 +869,10 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         self._consecutive_refresh_failures = 0
 
         bpm = self._read_bpm_best_effort()
+        if self._transport is None:
+            # A send failure inside the tempo read already took the loss path;
+            # do not publish a state that claims the connection is still up.
+            return
 
         # If the preset changed, drop any UI overrides.
         if (
@@ -879,17 +885,30 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         self._emit_state(self._preset_state(preset, bpm))
 
     def _read_bpm_best_effort(self) -> float | None:
-        """Read the tempo; a failure must never take the connection down."""
-        try:
-            bpm = self._backend.get_bpm(timeout_s=_BPM_TIMEOUT_S)
-        except Exception:
-            self._logger.warning(
-                "BPM read failed (connection_id=%d)",
-                self._connection_id,
-                exc_info=True,
-            )
-            return self._sanitize_bpm(None)
-        return self._sanitize_bpm(bpm)
+        """Read the tempo, retrying the idempotent read once.
+
+        A failure must never take the connection down: fall back to the last
+        good value. If the *send* failed, `_on_connection_lost` has already
+        run, so stop immediately instead of retrying against a dead handle.
+        """
+        for attempt in range(1, _BPM_ATTEMPTS + 1):
+            if self._transport is None:
+                return self._sanitize_bpm(None)
+            try:
+                bpm = self._backend.get_bpm(timeout_s=_BPM_TIMEOUT_S)
+            except Exception:
+                self._logger.warning(
+                    "BPM read failed (attempt=%d, connection_id=%d)",
+                    attempt,
+                    self._connection_id,
+                    exc_info=True,
+                )
+                if self._transport is None:
+                    return self._sanitize_bpm(None)
+                continue
+            return self._sanitize_bpm(bpm)
+
+        return self._sanitize_bpm(None)
 
     def _on_program_dump_timeout(self, exc: BaseException) -> None:
         """One missed dump is a stall; two in a row mean the link is dead."""

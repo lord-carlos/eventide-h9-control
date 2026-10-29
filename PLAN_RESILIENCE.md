@@ -17,7 +17,7 @@ the plan at the time, not open work.*
 Branch **`feature/resilience-improvements`**, not merged to master. Merges:
 `330fc82` (MIDI handle safety), `1b2e698` (config), `fa1410c` (worker
 supervisor), `fc298bd` (audio). Feature commits: `bd3757c`, `26b0c42`,
-`2127a94`, `1fb18ba`, `2959610`, `55e374a`. Suite: **242 passing** (183 before
+`2127a94`, `1fb18ba`, `2959610`, `55e374a`. Suite: **244 passing** (183 before
 this work).
 
 Two fixes came out of review rather than the plan as written:
@@ -32,6 +32,12 @@ Two fixes came out of review rather than the plan as written:
    auto-sync stop using a tempo that is already gone, and `start()` resets
    `_needs_recovery` so a stale flag cannot trigger a spurious recovery
    immediately after a successful start. (`55e374a`)
+3. **Worker — retry the tempo read once and never republish a stale
+   `connected=True`.** The §3 requirement to retry idempotent reads covers the
+   BPM read as well as the program dump, and a send failure during that read
+   previously let `_refresh_state_once()` publish a connected state after the
+   loss path had already torn the transport down. Both are covered in
+   `tests/test_connection_supervisor.py`.
 
 ---
 

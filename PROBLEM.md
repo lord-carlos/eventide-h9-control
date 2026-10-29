@@ -337,7 +337,7 @@ it. When a segment is completed, delete its entries here or move them to a
 ## Resolved — resilience work
 
 *Closed 2026-10-29 on `feature/resilience-improvements` (not merged to master;
-see `PLAN_RESILIENCE.md` for the design record). Suite: 242 passing.*
+see `PLAN_RESILIENCE.md` for the design record). Suite: 244 passing.*
 
 - **MIDI reconnects by itself.** Unplugging the H9 no longer kills the RX thread
   silently: the worker detects the loss (RX exception, send error, or port
