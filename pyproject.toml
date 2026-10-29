@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "eventide-h9-control"
 version = "0.1.0"
@@ -5,7 +9,7 @@ description = "A Qt UI for the Eventide H9 effects unit."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "gpiozero>=2.0.1",
+    "gpiozero>=2.0.1; sys_platform == 'linux'",
     "lgpio>=0.2.2.0; sys_platform == 'linux'",
     "librosa>=0.10.2",
     "mido>=1.3.3",
@@ -38,3 +42,13 @@ dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
 ]
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["h9control"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"main.py" = "main.py"
+"ui_main.py" = "ui_main.py"

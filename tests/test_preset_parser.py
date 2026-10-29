@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from h9control.domain.preset import parse_preset_dump_text
@@ -64,11 +66,53 @@ def test_hex_effect_number_on_knob_line() -> None:
     assert preset.effect_number_raw == 11
 
 
-def test_too_few_knob_values_yields_no_knob_map() -> None:
+def test_short_dump_keeps_partial_knob_values_without_mapping() -> None:
     preset = parse_preset_dump_text(_dump("[1] 0 2 1", "0 2600 3600 4200", "C_X", "DIGDLY", "NAME"))
 
-    assert preset.knob_values is None
+    assert preset.knob_values == [0x2600, 0x3600, 0x4200]
     assert preset.knobs_by_name is None
+
+
+def test_overrange_knob_values_are_clamped_to_14bit_max() -> None:
+    # Tokens > 0x7FE0 must not reach the dashboard as >100% bars.
+    preset = parse_preset_dump_text(
+        _dump(
+            "[1] 0 2 1",
+            "0 FFFE 7FE1 2600 3600 4200 3000 5200 4800 3000 7F",
+            "C_X",
+            "DIGDLY",
+            "NAME",
+        )
+    )
+
+    assert preset.knob_values == [0x7FE0, 0x7FE0, 0x2600, 0x3600, 0x4200, 0x3000, 0x5200, 0x4800, 0x3000, 0x7F]
+    assert preset.pedal_value is None  # only 10 value tokens in this strip
+    assert preset.knobs_by_name is not None
+
+
+def test_negative_knob_tokens_clamp_to_zero(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="h9control.domain.preset"):
+        preset = parse_preset_dump_text(
+            _dump("[1] 0 2 1", "0 -8 2600 3600 4200 3000 5200 4800 3000 2400 4000 7F", "C_X", "DIGDLY", "NAME")
+        )
+
+    assert preset.knob_values[0] == 0
+    assert preset.knob_values[1] == 0x2600
+
+
+def test_short_dump_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="h9control.domain.preset"):
+        parse_preset_dump_text(_dump("[1] 0 2 1", "0 2600 3600 4200", "C_X", "DIGDLY", "NAME"))
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("only 3 knob value(s)" in r.getMessage() for r in warnings)
+
+
+def test_full_dump_does_not_log_knob_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="h9control.domain.preset"):
+        parse_preset_dump_text(_dump("[1] 0 2 1", DIGDLY_KNOB_LINE, "C_X", "DIGDLY", "NAME"))
+
+    assert not any(r.levelno == logging.WARNING for r in caplog.records)
 
 
 def test_fallback_to_category_index_when_name_missing() -> None:

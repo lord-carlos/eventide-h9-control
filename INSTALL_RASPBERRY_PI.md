@@ -44,7 +44,7 @@ To run manually without systemd:
 Edit `config.json` to customize:
 - Audio input device (configure from Settings UI)
 - Keyboard shortcuts
-- GPIO pins (see `config.example-with-gpio.json`)
+- GPIO pins (the committed `config.json` includes example GPIO/encoder bindings)
 - Knob lock settings
 
 ## GPIO Hardware Buttons

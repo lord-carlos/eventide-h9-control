@@ -111,7 +111,11 @@ def test_feedback_knob_uses_coarse_5_percent_step(sim_worker: H9DeviceWorker) ->
     sim_worker.adjust_knob_slot(2, 1)
 
     state = sim_worker._last_state
-    expected = 0x4800 + int(round(32736 * 0.05))
+    # The constructed 14-bit target is 0x4800 + 5%, but overrides are stored
+    # quantized to the 7-bit CC grid the device actually receives (fix for
+    # "7-bit CC sent, 14-bit override stored" — SEE PROBLEM.md 1.6):
+    # 0x4800 + 1637 = 20069 -> CC 78 -> back to 14-bit = round(78/127*0x7FE0).
+    expected = int(round((78 / 127.0) * 32736))
     assert state.knobs[2].raw_value == expected
 
 

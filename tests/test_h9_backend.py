@@ -85,6 +85,13 @@ def test_get_value_rejects_malformed_payload() -> None:
         _backend(loop).get_value(H9SystemKeys.KEY_SP_TEMPO, timeout_s=1.0)
 
 
+def test_get_value_rejects_malformed_value_token() -> None:
+    # Previously crashed / produced a bogus negative value from int(x, 16).
+    loop = FakeWaitLoop([_frame(H9SysexCodes.SYSEXC_VALUE_DUMP, b"302 -A0")])
+    with pytest.raises(ValueError, match="Cannot parse Eventide value"):
+        _backend(loop).get_value(H9SystemKeys.KEY_SP_TEMPO, timeout_s=1.0)
+
+
 def test_wait_timeout_propagates() -> None:
     loop = FakeWaitLoop([])
     with pytest.raises(TimeoutError):

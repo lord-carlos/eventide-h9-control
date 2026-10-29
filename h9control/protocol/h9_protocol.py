@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import logging
 import time
-import re
 
 from h9control.domain.preset import PresetSnapshot, parse_preset_dump_text
 from h9control.protocol.codes import H9SysexCodes, H9SystemKeys
-from h9control.protocol.sysex import SysexFrame, build_eventide_sysex, decode_eventide_sysex
+from h9control.protocol.sysex import (
+    SysexFrame,
+    build_eventide_sysex,
+    decode_eventide_sysex,
+    decode_eventide_value,
+)
 from h9control.transport.midi_transport import H9Transport
 
 
@@ -56,29 +60,6 @@ class H9Protocol:
             self._logger.debug("Knobs: %s", preset.knobs_by_name)
 
         return preset
-
-    def set_parameter(self, key: int, value: int | str) -> None:
-        """Set a parameter via SYSEXC_VALUE_PUT (0x2D).
-
-        Payload format used here matches the project's earlier implementation:
-        - key sent as ASCII hex (no 0x)
-        - a single space separator
-        - value sent as ASCII decimal string
-
-        Note: The critical missing piece for many parameters is discovering the correct key IDs.
-        """
-
-        key_str = f"{key:X}"
-        val_str = str(value)
-
-        payload = bytearray()
-        payload.extend(key_str.encode("ascii"))
-        payload.append(0x20)  # space
-        payload.extend(val_str.encode("ascii"))
-
-        self._logger.info("Setting parameter key=0x%X value=%s", key, val_str)
-        msg = build_eventide_sysex(self.device_id, H9SysexCodes.SYSEXC_VALUE_PUT, payload)
-        self._transport.send_sysex(msg)
 
     def get_current_bpm(self, *, timeout_s: float = 1.0) -> float:
         """Read the current tempo from the unit and return BPM.
@@ -150,13 +131,17 @@ class H9Protocol:
 
                 value_part = parts[1]
 
-                # Eventide docs often describe "ASCII hex", but in practice many
-                # values appear to be decimal when they contain digits only.
-                # Heuristic: if A-F appears, parse as hex; otherwise parse as decimal.
-                if re.fullmatch(r"-?\d+", value_part):
-                    return int(value_part, 10)
-                if re.fullmatch(r"[0-9A-Fa-f]+", value_part):
-                    return int(value_part, 16)
+                # Decode via the shared heuristic in protocol/sysex.py:
+                # digits-only -> decimal, hex digits -> hex, else malformed.
+                try:
+                    return decode_eventide_value(value_part)
+                except ValueError:
+                    self._logger.debug(
+                        "Ignoring unparseable VALUE_DUMP value %r for key 0x%X",
+                        value_part,
+                        key,
+                    )
+                    continue
 
             time.sleep(0.01)
 

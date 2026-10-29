@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
 
 from h9control.domain.algorithms import H9FullAlgorithmData
+from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -120,10 +125,20 @@ def parse_preset_dump_text(raw_text: str) -> PresetSnapshot:
                 except ValueError:
                     break
 
-            if len(hex_values) >= 10:
-                knob_values = hex_values[:10]
+            if hex_values:
+                # Values are 14-bit (0..0x7FE0). Clamp so over-range tokens
+                # can't reach the dashboard as >100% bars; negative tokens
+                # (e.g. a sign glyph) clamp to 0.
+                knob_values = [min(max(v, 0), MAX_KNOB_VALUE_14BIT) for v in hex_values[:10]]
                 if len(hex_values) >= 11:
                     pedal_value = hex_values[10]
+
+                if len(knob_values) < 10:
+                    logger.warning(
+                        "Preset dump yielded only %d knob value(s), expected 10; "
+                        "dashboard will show partial knob data",
+                        len(knob_values),
+                    )
 
     # Names usually appear after the checksum line.
     checksum_idx = next((i for i, line in enumerate(lines) if line.startswith("C_")), None)
@@ -163,7 +178,9 @@ def parse_preset_dump_text(raw_text: str) -> PresetSnapshot:
 
     if algorithm_key is not None and knob_values is not None:
         knob_names = H9FullAlgorithmData.knob_names(algorithm_key)
-        if len(knob_names) == 10:
+        # Map by name only when the dump is complete (10 names / 10 values),
+        # regardless of length mismatch on either side.
+        if len(knob_names) == 10 and len(knob_values) == 10:
             knobs_by_name = {name: value for name, value in zip(knob_names, knob_values, strict=True)}
 
     return PresetSnapshot(

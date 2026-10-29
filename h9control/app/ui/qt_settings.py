@@ -18,6 +18,10 @@ TOUCH_SPACING = 24  # Spacing between form rows for touch accuracy
 CONTROL_FONT_SIZE = 14  # Font size for interactive controls (increased from 12)
 
 # Stylesheet for larger checkbox and radio button indicators
+# Inline status-label colors shared by the status lines on this page.
+STATUS_COLOR_ERROR = "#b00020"  # Red: failures (config load, device refresh)
+STATUS_COLOR_INFO = "#777777"  # Gray: neutral status messages
+
 CHECKBOX_STYLESHEET = """
     QCheckBox::indicator {
         width: 24px;
@@ -129,6 +133,12 @@ class SettingsWidget(QtWidgets.QWidget):
 
         self._init_ui()
         self._load_settings()
+        self._refresh_config_status()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        # Re-check on show in case the config was reloaded since construction.
+        self._refresh_config_status()
 
     def _init_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
@@ -192,6 +202,12 @@ class SettingsWidget(QtWidgets.QWidget):
 
         # TODO: Add knob_order to settings UI (configurable list of which knobs to display and in what order)
 
+        # Config load status: hidden unless config.json failed to load
+        self._config_status = QtWidgets.QLabel()
+        self._config_status.setWordWrap(True)
+        self._config_status.setFont(QtGui.QFont("Arial", CONTROL_FONT_SIZE))
+        self._config_status.hide()
+
         # Audio Device
         self._device_combo = QtWidgets.QComboBox()
         self._device_combo.setMinimumWidth(COMBOBOX_MIN_WIDTH)
@@ -222,6 +238,7 @@ class SettingsWidget(QtWidgets.QWidget):
 
         lbl_device = QtWidgets.QLabel("Audio Input Device:")
         lbl_device.setFont(QtGui.QFont("Arial", 14))
+        form_layout.addRow("", self._config_status)
         form_layout.addRow(lbl_device, device_row)
         form_layout.addRow("", self._device_refresh_status)
 
@@ -379,6 +396,13 @@ class SettingsWidget(QtWidgets.QWidget):
                 border-radius: 10px;
             }
         """)
+        # Debounce brightness writes: coalesce slider ticks into one sysfs
+        # write per drag instead of one per pixel of movement.
+        self._brightness_timer = QtCore.QTimer(self)
+        self._brightness_timer.setSingleShot(True)
+        self._brightness_timer.setInterval(250)
+        self._brightness_timer.timeout.connect(self._apply_pending_brightness)
+        self._pending_brightness: int | None = None
         self._brightness_slider.valueChanged.connect(self._on_brightness_changed)
 
         lbl_brightness = QtWidgets.QLabel("Brightness:")
@@ -612,13 +636,42 @@ class SettingsWidget(QtWidgets.QWidget):
         logging.info("Refreshed audio input device list: %d device(s)", device_count)
         return device_count
 
+    def _apply_status(
+        self, label: QtWidgets.QLabel, text: str, color: str
+    ) -> None:
+        """Set a status label's text and color (single styling source)."""
+        label.setText(text)
+        label.setStyleSheet(f"color: {color};")
+
     def show_device_refresh_error(self, message: str) -> None:
-        self._device_refresh_status.setText(f"Audio device refresh failed: {message}")
-        self._device_refresh_status.setStyleSheet("color: #b00020;")
+        self._apply_status(
+            self._device_refresh_status,
+            f"Audio device refresh failed: {message}",
+            STATUS_COLOR_ERROR,
+        )
 
     def _set_device_refresh_status(self, message: str) -> None:
-        self._device_refresh_status.setText(message)
-        self._device_refresh_status.setStyleSheet("color: #777777;")
+        self._apply_status(
+            self._device_refresh_status, message, STATUS_COLOR_INFO
+        )
+
+    def _refresh_config_status(self) -> None:
+        """Surface config.json load failures; silence when the config is fine."""
+        error = self.config.load_error
+        if not error:
+            self._config_status.hide()
+            return
+        backup = self.config.config_path.with_suffix(".json.bak").name
+        self._apply_status(
+            self._config_status,
+            (
+                f"config.json could not be loaded ({error}). Using defaults. "
+                f"Your original file was saved as {backup} — fix or remove "
+                "the file, then reload the app."
+            ),
+            STATUS_COLOR_ERROR,
+        )
+        self._config_status.show()
 
     def _load_settings(self) -> None:
         self._restore_audio_selection()
@@ -654,7 +707,11 @@ class SettingsWidget(QtWidgets.QWidget):
             if self._backlight.is_available():
                 current = self._backlight.get_brightness_percent()
                 if current is not None:
+                    # Block signals so restoring the hardware value does not
+                    # schedule a redundant debounced write.
+                    slider_was_blocked = self._brightness_slider.blockSignals(True)
                     self._brightness_slider.setValue(current)
+                    self._brightness_slider.blockSignals(slider_was_blocked)
                 self._brightness_slider.setEnabled(True)
             else:
                 self._brightness_slider.setEnabled(False)
@@ -785,7 +842,15 @@ class SettingsWidget(QtWidgets.QWidget):
             self.settings_changed.emit()
 
     def _on_brightness_changed(self, value: int) -> None:
-        """Handle brightness slider change."""
+        """Store the pending brightness; it is written after a short pause."""
+        self._pending_brightness = value
+        self._brightness_timer.start()
+
+    def _apply_pending_brightness(self) -> None:
+        """Write the final brightness choice once (single debounced write)."""
+        if self._pending_brightness is None:
+            return
+        value, self._pending_brightness = self._pending_brightness, None
         if self._backlight.is_available():
             success = self._backlight.set_brightness_percent(value)
             if not success:

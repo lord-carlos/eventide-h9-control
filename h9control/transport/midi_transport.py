@@ -7,7 +7,7 @@ from typing import Any, Protocol, cast
 
 import mido
 
-from midi import H9Midi
+from h9control.transport.h9_midi import H9Midi
 from h9control.protocol.sysex import format_sysex_bytes
 
 
@@ -77,17 +77,11 @@ class MidiTransport:
         if channel < 0 or channel > 15:
             raise ValueError("channel must be 0..15")
 
-        # Send directly through the opened output port.
-        # (H9Midi currently only exposes SysEx send.)
-        out = getattr(self._midi, "_out", None)
-        if out is None:
-            raise RuntimeError("MIDI output not connected. Call connect() first.")
-
-        out.send(mido.Message("program_change", program=program, channel=channel))
+        self._midi.send_program_change(program, channel)
 
     def send_control_change(self, control: int, value: int, channel: int = 0) -> None:
         """Send MIDI Control Change message.
-        
+
         Args:
             control: CC number (0-127)
             value: CC value (0-127)
@@ -100,9 +94,5 @@ class MidiTransport:
         if channel < 0 or channel > 15:
             raise ValueError("channel must be 0..15")
 
-        out = getattr(self._midi, "_out", None)
-        if out is None:
-            raise RuntimeError("MIDI output not connected. Call connect() first.")
-
         logger.debug("TX CC: channel=%d control=%d value=%d", channel, control, value)
-        out.send(mido.Message("control_change", control=control, value=value, channel=channel))
+        self._midi.send_control_change(control, value, channel)

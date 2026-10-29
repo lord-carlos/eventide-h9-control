@@ -367,14 +367,14 @@ class DashboardWidget(QtWidgets.QWidget):
         self._btn_next.clicked.connect(self.next_requested.emit)
 
         self._btn_bpm = _MetricButton("PRESET BPM", fonts)
-        self._btn_bpm.setToolTip("Refresh the current preset and BPM")
-        self._btn_bpm.clicked.connect(self.connect_refresh_requested.emit)
+        self._btn_bpm.clicked.connect(self._on_bpm_clicked)
 
         self._lbl_live_bpm = _MetricButton("LIVE BPM", fonts)
         self._lbl_live_bpm.setToolTip("Sync the live BPM to the current preset")
         self._lbl_live_bpm.clicked.connect(self.sync_live_bpm_requested.emit)
 
         self._fonts = fonts
+        self._bpm_menu: QtWidgets.QMenu | None = None
 
         # --- header ---
         header = QtWidgets.QWidget()
@@ -617,6 +617,39 @@ class DashboardWidget(QtWidgets.QWidget):
 
             sc.activated.connect(make_multi_handler(handlers))
 
+    def _on_bpm_clicked(self) -> None:
+        """Show the BPM tile popup: tap a delta to adjust BPM, or refresh."""
+        menu = self._ensure_bpm_menu()
+        anchor = self._btn_bpm.mapToGlobal(QtCore.QPoint(0, self._btn_bpm.height()))
+        menu.popup(anchor)
+
+    def _ensure_bpm_menu(self) -> QtWidgets.QMenu:
+        """Build (once) the BPM tile popup with adjust and refresh actions.
+
+        Actions must be self-explanatory: this is a touchscreen UI with no
+        tooltips.
+        """
+        if self._bpm_menu is None:
+            menu = QtWidgets.QMenu(self)
+            menu.setFont(self._fonts.button)
+            for delta, label in (
+                (-1, "-1 BPM"),
+                (+1, "+1 BPM"),
+                (-5, "-5 BPM"),
+                (+5, "+5 BPM"),
+            ):
+                action = menu.addAction(label)
+                action.triggered.connect(
+                    lambda checked=False, delta=delta: self.adjust_bpm_requested.emit(
+                        delta
+                    )
+                )
+            menu.addSeparator()
+            refresh_action = menu.addAction("Refresh preset / BPM")
+            refresh_action.triggered.connect(self.connect_refresh_requested.emit)
+            self._bpm_menu = menu
+        return self._bpm_menu
+
     def apply_state(self, state: DashboardState) -> None:
         self._apply_state(state)
 
@@ -765,3 +798,7 @@ def fit_window_to_screen(
     width = min(preferred.width(), avail.width())
     height = min(preferred.height(), avail.height())
     window.resize(QtCore.QSize(width, height))
+    # Center on the screen the window opened on: move() places the frame
+    # top-left, so subtracting the frame center from the screen center yields
+    # exactly that position.
+    window.move(avail.center() - window.frameGeometry().center())

@@ -5,17 +5,44 @@ will drift after edits — re-locate by code context, not line number.*
 
 ## How to use this document
 
-## Status (2026-10-28)
+## Status (updated 2026-10-28)
+
+Integration branch: **`feature/cleanup-segments`** — contains all completed
+segments merged in (NOT merged to master yet). Combined suite: **183 passing**
+(was 132 at the start of the segment work; ~51 net new tests across segments).
 
 | Segment | Status |
 |---|---|
-| 1 — Worker bugs + split | ✅ Done — branch `segment-1-worker` (pending merge to master) |
-| 2 — MIDI transport | ✅ Done — branch `segment-2-midi` (pending merge to master) |
-| 3 — Audio / beat detection | ⬜ Open |
-| 4 — Config layer | ⬜ Open |
-| 5 — UI polish | ⬜ Open |
-| 6 — Protocol & validation | ⬜ Open |
-| 7 — Repo housekeeping | ⬜ Open |
+| 1 — Worker bugs + split | ✅ Done — merged (`segment-1-worker`) |
+| 2 — MIDI transport | ✅ Done — merged (`segment-2-midi`) |
+| 3 — Audio / beat detection | ✅ Done — merged (`segment-3-audio`) |
+| 4 — Config layer | ✅ Done — merged (`segment-4-config`) |
+| 5 — UI polish | ✅ Done — merged (`segment-5-ui`; 5.4 tooltips cancelled) |
+| 6 — Protocol & validation | ✅ Done — merged (`segment-6-protocol`) |
+| 7 — Repo housekeeping | ✅ Done — merged (`segment-7-repo`; see follow-ups) |
+
+### Open follow-ups (updated 2026-10-28)
+
+1. **`thread.wait(2000)` in `ui_main.py` (~line 234)** — in-app exit blocks up to
+   2 s. **Wontfix (owner decision)**: the device is typically powered off by
+   pulling the plug, so the shutdown-wait cap adds little real-world harm to
+   offsets already sped up by Segment 1 (blocking sleeps removed). A tiny
+   shrink to ~500 ms can still be folded into any future `ui_main.py` change.
+2. **`pyproject.toml` build-system — ✅ Done** (branch `followup-packaging`):
+   hatchling build backend + `[tool.uv] package = true`; wheel now carries the
+   `h9control` package plus root `main.py`/`ui_main.py`, so `[project.scripts]`
+   (`h9-control`, `h9-control-cli`) install via `uv sync` ("not found" in fresh
+   venvs fixed; verified `h9-control-cli --help` resolves). `readme.md` renamed
+   to `README.md` so the case-sensitive Pi build matches the `readme =`
+   reference. **Pi action after pulling this branch: run `uv sync` once** so the
+   two console scripts materialize. `linux/start-app.sh` / systemd unit are
+   unaffected (they launch `uv run python ui_main.py` directly).
+3. **`ConfigManager.load_error` surfaced — ✅ Done** (branch
+   `followup-config-error`): a red status banner (reusing the settings page's
+   existing inline status-label pattern, shared `_apply_status` helper) shows
+   the load failure + `config.json.bak` preservation at the top of the settings
+   page; it silently stays hidden when the config loads cleanly, and re-checks
+   via `showEvent` on page reopen.
 
 The work is split into **segments that do not touch each other**. Each segment
 lists exactly which files it is allowed to modify. Two agents / developers can
@@ -30,6 +57,8 @@ Rules:
     Any workaround for real hardware belongs in the owner's live config.
   - `/scripts/` directory — leave alone for now (this includes its imports of
     the root `midi.py`, see Segment 2's compat-shim note).
+  - UI tooltips (Segment 5.4 and similar) — this is a **touchscreen** app, not
+    mouse-driven. Do not add or improve tooltips anywhere.
 - Suggested order *within* a segment follows the numbering, but everything in
   a segment is independent of other segments.
 
@@ -147,7 +176,7 @@ with `scripts/` (which is out of scope):
 
 ---
 
-## Segment 3 — Audio / beat detection
+## Segment 3 — Audio / beat detection — ✅ DONE (branch `segment-3-audio`)
 
 **Files:** `h9control/audio/beat_detector.py` only.
 
@@ -177,7 +206,7 @@ Fix: guard `len(self.selected_channels) < 2` → fall back to mono-duplication p
 
 ---
 
-## Segment 4 — Config layer
+## Segment 4 — Config layer — ✅ DONE (branch `segment-4-config`)
 
 **Files:** `h9control/app/config.py` only.
 
@@ -201,7 +230,7 @@ batch) and only write when content actually changed.
 
 ---
 
-## Segment 5 — UI polish (dashboard + settings)
+## Segment 5 — UI polish (dashboard + settings) — ✅ DONE (branch `segment-5-ui`, item 5.4 cancelled)
 
 **Files:** `h9control/app/ui/qt_dashboard.py`, `h9control/app/ui/qt_settings.py` only.
 
@@ -219,14 +248,13 @@ every pixel of drag. Debounce ~200 ms (single-shot `QTimer`).
 `qt_dashboard.py` ~lines 756–767 resize only; the window ends up wherever the
 WM puts it (top-left). Call `window.move(avail.center() - window.rect().center())`.
 
-### 5.4 Status-dot tooltip shows status text only
-`qt_dashboard.py` ~line 637 sets the tooltip to the current status text. The
-dot is also the settings button (`.clicked.connect(settings_requested)` at
-~line 314) — append a hint like "· click to open settings" to the tooltip.
+### 5.4 ~~Status-dot tooltip shows status text only~~ — CANCELLED
+This app is a touchscreen UI, not mouse-driven; tooltips are not a useful
+discoverability mechanism here. Left out of scope by project decision.
 
 ---
 
-## Segment 6 — Protocol & validation hardening
+## Segment 6 — Protocol & validation hardening — ✅ DONE (branch `segment-6-protocol`)
 
 **Files:** `h9control/protocol/sysex.py`, `h9control/domain/preset.py`, `h9control/protocol/h9_protocol.py`, `h9control/app/h9_backend.py`, `pyproject.toml` (dependency markers). *No* UI files.
 
@@ -265,7 +293,7 @@ graceful fallback).
 
 ---
 
-## Segment 7 — Repo housekeeping & entry points
+## Segment 7 — Repo housekeeping & entry points — ✅ DONE (branch `segment-7-repo`)
 
 **Files:** `main.py`, `test.py`, `ui_main.py`, `README.md`/docs cross-references. *Do not* touch `qt_worker.py` (Segment 1 owns it) or `scripts/`.
 
