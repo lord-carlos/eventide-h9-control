@@ -1,6 +1,13 @@
 # Plan: full-knob page ("ALL KNOBS")
 
-Status: proposed — branch `feature/all-knobs-page`.
+Status: implemented — branch `feature/all-knobs-page`.
+
+Implementation notes:
+- Ten knobs do not fit as touch targets on 1280x720, so the page uses a
+  **scrollable 2-column grid** (5 rows) with large tiles instead of a fixed
+  5x2 grid. Scrolling was accepted as the trade-off for finger-sized sliders.
+- `--screenshot-page {dashboard,knobs,settings}` was added to `ui_main.py` so
+  the new page can be captured with the existing screenshot workflow.
 
 ## Goal
 
@@ -105,8 +112,9 @@ today. UI-side throttling (below) bounds message rate.
   `adjust_knob_requested(str, int)`.
 - Header: preset number/name, algorithm display name, `BACK` button
   (mirrors `SettingsWidget`).
-- Body: a `QGridLayout` with **5 columns × 2 rows** for the 10 knobs
-  (1280×720 → ~236×260 px per tile, comfortably touch-sized).
+- Body: a **scrollable** `QGridLayout` with **2 columns × 5 rows** for the 10
+  knobs (1280×720 → ~600 px wide tiles, so sliders stay finger-sized; the
+  page scrolls vertically like the settings page).
 - Each tile (`_KnobTile`):
   - knob name label (`knob_label` font),
   - large value label using `pretty` (or `NN%`),
@@ -181,10 +189,12 @@ today. UI-side throttling (below) bounds message rate.
 
 ### 8. Layout constraints / risks
 
-- Target screen is fixed 1280×720 and the page must not scroll: 5×2 grid with
-  fixed margins and per-tile minimum height; verify by screenshot with
+- Target screen is fixed 1280×720. The page intentionally scrolls (2-column
+  grid); verify by screenshot with
   `uv run python ui_main.py --simulate-h9 --no-audio --no-gpio --no-config-save
-  --screenshot <path>` and by running the app on the Pi.
+  --screenshot <path> --screenshot-page knobs` and by running the app on the
+  Pi. Only the visible 3.5 rows are readable without a swipe, which is the
+  accepted trade-off for larger touch targets.
 - 7-bit CC quantization is coarse for some parameters (pitch, filter). The
   pretty formatter re-quantizes from the stored 14-bit value, so labels stay
   truthful; optional division snapping improves DLY-A/B. If finer control is
