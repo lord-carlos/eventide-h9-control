@@ -48,6 +48,11 @@ MONO_MODE = False  # Set to True to use only first channel (halves CPU/USB bandw
 SILENCE_THRESHOLD = 0.05  # Skip BPM calc when audio below this level
 HOLD_BPM_ON_SILENCE = True  # Keep last BPM during silence/breakdowns
 
+# Stream recovery backoff (seconds per attempt; the last value repeats). The
+# stream is retried indefinitely, so a late or unplugged USB device is picked
+# up whenever it appears.
+RECOVERY_BACKOFF_DELAYS = (1, 2, 4, 8, 16, 30)
+
 # SPSC safety margin: the analysis thread never reads closer to the published
 # write index than this many callback blocks (in interleaved samples). One
 # in-flight block is the provable minimum; two give headroom against
@@ -92,8 +97,8 @@ class BeatDetector(QObject):
     recovery, buffer resize) happen only while the stream is stopped, so no
     producer or reader can race them.
 
-    Also provides fault detection for silent failures (callback stalls,
-    dead streams).
+    Also provides fault detection for silent failures (callback stalls) and
+    keeps retrying while the audio device is missing.
     """
 
     bpm_detected = Signal(float)
@@ -156,7 +161,12 @@ class BeatDetector(QObject):
         self.recovery_attempts = 0
         self.last_recovery_time: float = 0.0
         self.total_recoveries = 0
-        self.stream_dead = False  # True when recovery fails permanently
+
+        # Identity (name, hostapi) of the last successfully opened device, used
+        # to re-find it when a replug shifts its index
+        self._device_identity: tuple[str, int | None] | None = None
+        self._bpm_loss_cleared = False  # True once -1.0 was emitted for this loss
+        self.status_text = "Stopped"
 
         # Buffer health tracking
         self.last_callback_time: float = 0.0
@@ -257,12 +267,17 @@ class BeatDetector(QObject):
 
         self.running = True
         self._stop_event.clear()
-        self.stream_dead = False
+        self._needs_recovery = False
+        self.recovery_attempts = 0
+        self.callback_stall_count = 0
+        self._bpm_loss_cleared = False
+        self.status_text = "Starting"
 
-        # Open stream directly (no capture thread needed)
+        # Open stream directly (no capture thread needed). A missing device is
+        # not fatal: the analysis loop keeps retrying until one appears.
         if not self._start_stream():
-            self.running = False
-            return
+            self._needs_recovery = True
+            self.status_text = "Audio disconnected (retrying)"
 
         # Start analysis thread with lower priority
         self.analysis_thread = threading.Thread(target=self._analysis_loop, daemon=True)
@@ -270,9 +285,13 @@ class BeatDetector(QObject):
 
         logging.info("BeatDetector started with ring buffer.")
 
-    def _start_stream(self) -> bool:
+    def _start_stream(self, device_index: int | None = None) -> bool:
         """Open and start the audio stream."""
-        input_device_index = self.config.audio_input_device_id
+        input_device_index = (
+            device_index
+            if device_index is not None
+            else self.config.audio_input_device_id
+        )
 
         # Read selected channels from config
         self.selected_channels = self.config.audio_selected_channels
@@ -352,6 +371,7 @@ class BeatDetector(QObject):
             f"(buffer: {BUFFER_DURATION}s, update: {UPDATE_INTERVAL}s, "
             f"mode: {'mono' if self.mono_mode else 'stereo'})"
         )
+        self.status_text = "Listening"
 
         return True
 
@@ -367,6 +387,7 @@ class BeatDetector(QObject):
         self.analysis_thread = None
 
         self._cleanup_stream()
+        self.status_text = "Stopped"
         logging.info("BeatDetector stopped.")
 
     def _recalculate_buffer_sizes(self) -> None:
@@ -396,12 +417,6 @@ class BeatDetector(QObject):
         while self.running and not self._stop_event.is_set():
             time.sleep(UPDATE_INTERVAL)
 
-            # Check for stream death
-            if self.stream_dead:
-                logging.error("Stream is dead, stopping analysis")
-                self.bpm_detected.emit(-1.0)
-                break
-
             # Check for callback stall (>2 seconds without callback)
             time_since_callback = time.time() - self.last_callback_time
             if self.last_callback_time > 0 and time_since_callback > 2.0:
@@ -411,21 +426,13 @@ class BeatDetector(QObject):
                 self.callback_stall_count += 1
                 self._needs_recovery = True
 
-                # Too many stalls = permanent failure
-                if self.callback_stall_count >= 3:
-                    logging.error("Too many callback stalls, marking stream as dead")
-                    self.stream_dead = True
-                    self.bpm_detected.emit(-1.0)
-                    break
-
-            # Check if we need recovery
-            if self._needs_recovery and self._should_attempt_recovery():
+            # Check if we need recovery. Retry forever: a missing (or
+            # unplugged) device is expected to come back at some point.
+            if self._needs_recovery:
                 if self._attempt_recovery():
                     logging.info("Stream recovered successfully")
                 else:
-                    logging.error("Stream recovery failed")
-                    self.stream_dead = True
-                    self.bpm_detected.emit(-1.0)
+                    logging.error("Stream recovery failed, will retry")
                 continue
 
             # Check for new audio data. The unlocked read of write_index
@@ -504,37 +511,30 @@ class BeatDetector(QObject):
             segment2 = self.ring_buffer[: read_len - first_part].copy()
             return np.concatenate([segment1, segment2])
 
-    def _should_attempt_recovery(self) -> bool:
-        """Check if we should attempt stream recovery."""
-        MAX_RECOVERY_ATTEMPTS = 3
-        RECOVERY_COOLDOWN_SECONDS = 30
-
-        if self.recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
-            logging.error(f"Max recovery attempts ({MAX_RECOVERY_ATTEMPTS}) reached")
-            return False
-
-        # Cooldown period
-        time_since_last = time.time() - self.last_recovery_time
-        if time_since_last < RECOVERY_COOLDOWN_SECONDS:
-            return False
-
-        return True
-
     def _attempt_recovery(self) -> bool:
-        """Attempt to recover audio stream."""
-        RECOVERY_BACKOFF_DELAYS = [1.0, 2.0, 4.0]
-
+        """Attempt to recover the audio stream, retrying forever via backoff."""
         self.recovery_attempts += 1
         attempt_num = self.recovery_attempts
 
-        logging.error(f"Audio stream recovery attempt {attempt_num}/3")
-
-        # Calculate backoff delay
+        # Calculate backoff delay (last value repeats, so retries never stop)
         delay = RECOVERY_BACKOFF_DELAYS[
             min(attempt_num - 1, len(RECOVERY_BACKOFF_DELAYS) - 1)
         ]
-        logging.info(f"Waiting {delay}s before recovery attempt...")
-        time.sleep(delay)
+        logging.error(
+            f"Audio stream recovery attempt {attempt_num} (waiting {delay}s)"
+        )
+
+        # Tell the worker the live BPM is gone *before* the backoff wait: the
+        # dashboard must stop showing (and continuous auto-sync must stop
+        # sending) a stale tempo as soon as the stream is known to be dead.
+        # Emitted once per loss, not per retry. The stabilizer keeps its last
+        # value so a tempo is confirmed normally after recovery.
+        if self.bpm > 0 and not self._bpm_loss_cleared:
+            self.bpm_detected.emit(-1.0)
+            self._bpm_loss_cleared = True
+
+        if self._stop_event.wait(delay):
+            return False
 
         # Close existing stream
         self._cleanup_stream()
@@ -548,20 +548,49 @@ class BeatDetector(QObject):
         logging.info("Cleared ring buffer for fresh start")
 
         # Wait for USB device to settle
-        time.sleep(0.5)
+        if self._stop_event.wait(0.5):
+            return False
 
-        # Reopen stream
-        if self._start_stream():
+        # Reopen stream, preferring the device we last used if it moved index
+        if self._start_stream(device_index=self._resolve_saved_identity()):
             logging.info(f"Recovery successful (attempt {attempt_num})")
             self.recovery_attempts = 0
             self.last_recovery_time = time.time()
             self.total_recoveries += 1
             self._needs_recovery = False
             self.callback_stall_count = 0
+            self._bpm_loss_cleared = False
+            self.status_text = "Listening"
             return True
-        else:
-            logging.error(f"Recovery failed on attempt {attempt_num}")
-            return False
+
+        logging.error(f"Recovery failed on attempt {attempt_num}")
+        self.status_text = "Audio disconnected (retrying)"
+        return False
+
+    def _resolve_saved_identity(self) -> int | None:
+        """Return the index of the last-used input device, or None.
+
+        Device indices shift when USB devices are plugged in or removed, so
+        recovery re-finds the device by its (name, hostapi) identity. None
+        falls back to the configured/default device path.
+        """
+        if self._device_identity is None:
+            return None
+
+        try:
+            for index, dev in enumerate(sd.query_devices()):
+                identity = (dev.get("name"), dev.get("hostapi"))
+                if (
+                    identity == self._device_identity
+                    and int(dev.get("max_input_channels", 0)) > 0
+                ):
+                    return index
+        except Exception as e:
+            logging.debug(f"Failed to resolve saved audio device identity: {e}")
+            return None
+
+        logging.debug(f"Saved audio device identity {self._device_identity} gone")
+        return None
 
     def _find_fallback_device(self, channels: int) -> int | None:
         """Find a fallback input device if configured one fails."""
@@ -605,6 +634,9 @@ class BeatDetector(QObject):
                 self.stream.start()
 
             logging.info("Stream opened and started successfully")
+            # Remember which device this is so a replug that shifts indices
+            # can still be recovered onto the same hardware
+            self._device_identity = (dev_info.get("name"), dev_info.get("hostapi"))
             return True
         except Exception as e:
             logging.error(f"Failed to open audio stream on device {device_index}: {e}")
