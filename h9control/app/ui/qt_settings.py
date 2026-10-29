@@ -656,7 +656,19 @@ class SettingsWidget(QtWidgets.QWidget):
         )
 
     def _refresh_config_status(self) -> None:
-        """Surface config.json load failures; silence when the config is fine."""
+        """Surface config.json save/load failures; silence when all is well."""
+        if self.config.save_error:
+            self._apply_status(
+                self._config_status,
+                (
+                    f"Settings could not be saved ({self.config.save_error}). "
+                    "Changes are kept in memory and will be retried; check "
+                    "disk space/permissions."
+                ),
+                STATUS_COLOR_ERROR,
+            )
+            self._config_status.show()
+            return
         error = self.config.load_error
         if not error:
             self._config_status.hide()

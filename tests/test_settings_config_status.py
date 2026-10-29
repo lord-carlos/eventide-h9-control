@@ -85,3 +85,27 @@ def test_show_event_refreshes_banner(
     assert widget._config_status.isHidden()
     widget.deleteLater()
     app.processEvents()
+
+
+def test_save_error_shows_red_banner_and_clears(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    widget = _make_widget(monkeypatch, tmp_path, raw='{"theme_mode": "dark"}')
+    assert widget._config_status.isHidden()
+    assert widget.config.load_error is None
+    assert widget.config.save_error is None
+
+    widget.config.save_error = "No space left on device"
+    widget._refresh_config_status()
+
+    label = widget._config_status
+    assert not label.isHidden()
+    assert "Settings could not be saved" in label.text()
+    assert "No space left on device" in label.text()
+    assert "color: #b00020" in label.styleSheet()
+
+    # A later successful save clears the banner again.
+    widget.config.save_error = None
+    widget._refresh_config_status()
+    assert label.isHidden()
+    widget.deleteLater()
