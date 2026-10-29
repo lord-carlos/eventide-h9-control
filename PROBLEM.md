@@ -331,3 +331,38 @@ it. When a segment is completed, delete its entries here or move them to a
 
 - GPIO pin-number conflicts in `config.json` (e.g. two actions on pin 23) —
   the committed `config.json` is an example; add real assignments locally.
+
+---
+
+## Resolved — resilience work
+
+*Closed 2026-10-29 on `feature/resilience-improvements` (not merged to master;
+see `PLAN_RESILIENCE.md` for the design record). Suite: 242 passing.*
+
+- **MIDI reconnects by itself.** Unplugging the H9 no longer kills the RX thread
+  silently: the worker detects the loss (RX exception, send error, or port
+  disappearance), reports `connected=False` instead of a stale green state, and
+  retries on a bounded 1/2/5/10/30 s backoff until the device is back. A
+  successful reconnect re-reads the program from the pedal rather than trusting
+  the last cached snapshot.
+- **A failed refresh no longer claims "connected".** One program-dump timeout is
+  reported as "H9 not responding (retrying)" with the last snapshot kept; two
+  consecutive timeouts take the full disconnect path. A BPM read failure still
+  leaves the connection up (with `(BPM unavailable)` when no good value exists).
+- **Config writes are atomic.** `_write_file()` writes `config.json.tmp`,
+  flushes, `os.fsync()`s and then `os.replace()`s, so a crash or power cut cannot
+  leave a half-written file; a stale `.tmp` is discarded on load. A failed save
+  keeps the change in memory, leaves the config dirty for the next flush, and
+  shows "Settings could not be saved …" in the Settings status banner.
+- **Audio retries forever.** A missing or unplugged interface no longer kills
+  detection after three attempts: `start()` keeps monitoring when the first open
+  fails, and `_attempt_recovery()` backs off 1/2/4/8/16/30 s indefinitely, waits
+  on the stop event (so `stop()` stays prompt), and re-finds the device by
+  `(name, hostapi)` after an index shift. Live BPM is cleared once on loss, so
+  the dashboard and continuous auto-sync stop using a dead tempo.
+- **Tests:** `tests/test_h9_midi_resilience.py` (handle safety, port presence),
+  `tests/test_connection_supervisor.py` (backoff, generations, stale-RX guard,
+  truthful states, two-timeout loss), `tests/test_beat_detector_recovery.py`
+  (late device, indefinite retry, interruptible backoff, identity resolution),
+  `tests/test_config.py` and `tests/test_settings_config_status.py` (atomic
+  writes, `save_error` banner).

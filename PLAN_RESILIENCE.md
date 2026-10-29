@@ -1,5 +1,40 @@
 # Plan: Reliability and Resilience Improvements (v2)
 
+## Implementation status
+
+*Closed out 2026-10-29: §1–§4 are implemented, §5 was left unchanged by owner
+decision. The design record below is kept as written — its TODO markers describe
+the plan at the time, not open work.*
+
+| Section | State |
+|---|---|
+| §1 MIDI connection lifecycle | **Done** — supervisor state machine, RX fault isolation, connection generations, truthful states, resync on reconnect, exception-safe connect/close, port presence |
+| §2 Audio (USB hotplug) | **Done** — minimal patch, `beat_detector.py` only; late/missing devices now retry indefinitely |
+| §3 Requests, timers, shutdown | **Done, folded into §1** — retry-once idempotent reads, waiter cancellation, generation guards, timer cleanup, shutdown ordering |
+| §4 Config safety | **Done** — atomic `tmp → fsync → os.replace`, stale `.tmp` cleanup, save failures surfaced in Settings |
+| §5 Pi service / crash recovery | **No change** — owner decision. `linux/**` and `INSTALL_RASPBERRY_PI.md` untouched, and systemd still supervises labwc rather than Python, so a crashed app still leaves the last frame on screen |
+
+Branch **`feature/resilience-improvements`**, not merged to master. Merges:
+`330fc82` (MIDI handle safety), `1b2e698` (config), `fa1410c` (worker
+supervisor), `fc298bd` (audio). Feature commits: `bd3757c`, `26b0c42`,
+`2127a94`, `1fb18ba`, `2959610`, `55e374a`. Suite: **242 passing** (183 before
+this work).
+
+Two fixes came out of review rather than the plan as written:
+
+1. **Worker — stale RX threads must not report faults.** A thread from a
+   superseded connection can still raise while it is being torn down; its report
+   would cancel the *new* connection's waiters or tear it down. `_report_rx_failure()`
+   now drops reports whose `connection_id` is not current (or whose stop event is
+   set). (`1fb18ba`)
+2. **Audio — clear the live BPM before the backoff, reset the flag on start.**
+   `-1.0` is emitted before the recovery wait so the dashboard and continuous
+   auto-sync stop using a tempo that is already gone, and `start()` resets
+   `_needs_recovery` so a stale flag cannot trigger a spurious recovery
+   immediately after a successful start. (`55e374a`)
+
+---
+
 *Revised after a line-by-line review of the modules named in v1, then narrowed
 by two owner decisions: the Pi service setup stays as it is, and the audio
 pipeline may only be touched by a minimal, isolated patch. v1 contained several
