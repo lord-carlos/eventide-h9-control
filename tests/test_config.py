@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -348,3 +349,98 @@ def test_autosave_disabled_on_missing_file_keeps_file_absent(tmp_path: Path) -> 
     manager.audio_min_bpm = 75.0
     manager.flush()
     assert not path.exists()
+
+
+def _temp_path_for(path: Path) -> Path:
+    """The sibling temp file ConfigManager writes before os.replace."""
+    return path.with_name(path.name + ".tmp")
+
+
+def test_successful_save_leaves_no_temp_file(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+    manager.theme_mode = "dark"
+    manager.flush()
+
+    assert list(tmp_path.glob("*.tmp")) == []
+    assert json.loads(path.read_text(encoding="utf-8"))["theme_mode"] == "dark"
+
+
+def test_write_goes_through_atomic_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+    replacements: list[tuple[Path, Path]] = []
+    original_replace = os.replace
+
+    def recording_replace(src: str | Path, dst: str | Path) -> None:
+        replacements.append((Path(src), Path(dst)))
+        original_replace(src, dst)
+
+    monkeypatch.setattr("h9control.app.config.os.replace", recording_replace)
+
+    manager.theme_mode = "dark"
+    manager.flush()
+
+    assert replacements == [(_temp_path_for(path), path)]
+    assert path.exists()
+
+
+def test_write_failure_reports_save_error_and_keeps_old_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"theme_mode": "dark"}))
+    previous_bytes = path.read_bytes()
+    manager = ConfigManager(path)
+    assert manager.save_error is None
+
+    def failing_replace(src: str | Path, dst: str | Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("h9control.app.config.os.replace", failing_replace)
+
+    manager.theme_mode = "light"
+    manager.flush()
+
+    assert manager.save_error == "disk full"
+    assert manager._dirty is True
+    assert manager.theme_mode == "light"  # change kept in memory
+    assert path.read_bytes() == previous_bytes  # old file untouched
+    assert not _temp_path_for(path).exists()  # temp file cleaned up
+
+
+def test_save_error_cleared_after_successful_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+
+    def failing_replace(src: str | Path, dst: str | Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("h9control.app.config.os.replace", failing_replace)
+    manager.theme_mode = "dark"
+    manager.flush()
+    assert manager.save_error == "disk full"
+
+    monkeypatch.undo()
+    manager.flush()
+
+    assert manager.save_error is None
+    assert manager._dirty is False
+    assert json.loads(path.read_text(encoding="utf-8"))["theme_mode"] == "dark"
+
+
+def test_load_removes_stale_temp_file(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"theme_mode": "dark"}))
+    stale_temp = _temp_path_for(path)
+    stale_temp.write_text('{"theme_mode": "lig')  # crash before os.replace
+
+    manager = ConfigManager(path)
+
+    assert not stale_temp.exists()
+    assert manager.config.theme_mode == "dark"
+

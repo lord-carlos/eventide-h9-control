@@ -11,6 +11,7 @@ from PySide6 import QtCore
 
 from h9control.app.bpm_sync import BpmSyncMixin, sanitize_live_bpm
 from h9control.app.config import ConfigManager
+from h9control.app.connection import ConnectionState, RetryBackoff
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
 from h9control.app.preset_jump import PresetJump
@@ -36,12 +37,39 @@ from midi import H9Midi
 # before a fresh preset dump returns the new state.
 _PRESET_SETTLE_MS = 300
 
+# Per-request timeouts (PLAN_RESILIENCE.md §3): 2 s for the program dump,
+# 1 s for the tempo read.
+_PROGRAM_DUMP_TIMEOUT_S = 2.0
+_BPM_TIMEOUT_S = 1.0
+
+# The program dump and the tempo read are both reads, so each may be
+# re-requested once on timeout. Relative commands and VALUE_PUT never are.
+_PROGRAM_DUMP_ATTEMPTS = 2
+_BPM_ATTEMPTS = 2
+
+# How often the RX thread checks (while idle) that the MIDI port still exists.
+_PORT_CHECK_INTERVAL_S = 3.0
+
+_RX_BUSY_SLEEP_S = 0.005
+_RX_IDLE_SLEEP_S = 0.02
+
 
 class _FrameWaiter:
-    def __init__(self, predicate: Callable[[SysexFrame], bool]) -> None:
+    """A one-shot wait for a matching SysEx frame.
+
+    Waiters are tagged with the connection they were created for and can be
+    cancelled from any thread (the RX thread cancels them on a fault so the
+    worker thread does not stay blocked in `wait()`).
+    """
+
+    def __init__(
+        self, predicate: Callable[[SysexFrame], bool], *, connection_id: int = 0
+    ) -> None:
         self.predicate = predicate
+        self.connection_id = connection_id
         self._event = threading.Event()
         self._frame: SysexFrame | None = None
+        self._cancel_error: BaseException | None = None
 
     def try_set(self, frame: SysexFrame) -> bool:
         if self._event.is_set():
@@ -52,15 +80,31 @@ class _FrameWaiter:
         self._event.set()
         return True
 
+    def cancel(self, exc: BaseException) -> None:
+        """Unblock the waiter. Safe to call repeatedly."""
+        if self._event.is_set():
+            return
+        self._cancel_error = exc
+        self._event.set()
+
     def wait(self, timeout_s: float) -> SysexFrame | None:
+        """Return the frame, or None on timeout *and* on cancellation."""
         self._event.wait(timeout_s)
         return self._frame
+
+    def raise_if_cancelled(self) -> None:
+        if self._cancel_error is not None:
+            raise self._cancel_error
 
 
 class _PresetChangeDetector:
     def __init__(self, now: Callable[[], float] | None = None) -> None:
         self._recent_prefixes: deque[tuple[float, bytes]] = deque()
         self._now = now if now is not None else time.monotonic
+
+    def reset(self) -> None:
+        """Forget observed prefixes (called on every (re)connect)."""
+        self._recent_prefixes.clear()
 
     def observe(self, frame: SysexFrame) -> bool:
         if frame.command != 0x60:
@@ -89,6 +133,10 @@ class _PresetChangeDetector:
 class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
     state_changed = QtCore.Signal(object)
     preset_change_detected = QtCore.Signal()
+
+    # Emitted by the RX thread when it dies (USB unplug, backend error); the
+    # connected slot performs the teardown on the worker thread.
+    _connection_lost = QtCore.Signal(str)
 
     # Internal signals for GPIO callbacks (thread-safe)
     _gpio_adjust_knob_slot_signal = QtCore.Signal(int, int)
@@ -145,6 +193,20 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         self._event_refresh_cooldown_s = 1.5
         self._last_event_refresh_at = 0.0
         self._event_refresh_in_progress = False
+
+        # Connection supervision: the worker owns the lifecycle so a dead or
+        # unplugged transport is replaced instead of silently reporting
+        # connected=True (PLAN_RESILIENCE.md §1).
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._connection_id = 0
+        self._backoff = RetryBackoff()
+        self._shutting_down = False
+        self._consecutive_refresh_failures = 0
+        self._last_port_check_at = 0.0
+        self._supervisor_timer = QtCore.QTimer(self)
+        self._supervisor_timer.setSingleShot(True)
+        self._supervisor_timer.timeout.connect(self._attempt_connect)
+        self._connection_lost.connect(self._on_connection_lost)
 
         self._last_state = DashboardState(
             connected=False,
@@ -352,10 +414,18 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
 
     @QtCore.Slot()
     def connect_or_refresh(self) -> None:
-        if self._transport is None:
-            self._connect()
+        """Single entry point for F5 / GPIO / startup.
 
-        if self._transport is None:
+        A manual request always resets the backoff and attempts immediately
+        rather than waiting for the supervisor timer.
+        """
+        if self._shutting_down:
+            return
+
+        self._backoff.reset()
+        if self._connection_state is not ConnectionState.CONNECTED:
+            self._attempt_connect()
+        if self._connection_state is not ConnectionState.CONNECTED:
             return
 
         self._refresh_state()
@@ -557,165 +627,385 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
 
     @QtCore.Slot()
     def shutdown(self) -> None:
-        # Stop the event-refresh timer first: it may still be armed from an
-        # earlier preset-change event and must not fire against a closed
-        # transport once we tear everything down below.
+        # Set the flag first: every other entry point checks it and must stop
+        # scheduling work as soon as shutdown begins.
+        self._shutting_down = True
+        self._supervisor_timer.stop()
         self._event_refresh_timer.stop()
 
         self._gpio.unbind_all()
 
-        self._rx_stop.set()
-        if self._rx_thread is not None and self._rx_thread.is_alive():
-            self._rx_thread.join(timeout=1.0)
-        self._rx_thread = None
+        self._cancel_waiters(RuntimeError("Shutting down"))
+        self._teardown_connection()
 
-        if self._transport is not None:
-            try:
-                self._transport.close()
-            except Exception:
-                self._logger.exception("Error while closing transport")
-        self._transport = None
-        self._midi = None
-
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._connection_status = "Disconnected"
         with self._waiters_lock:
             self._waiters.clear()
+        # Deliberately no state emission here: the UI is going away.
+
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
 
     def _connect(self) -> None:
-        connection_status = "Simulated H9" if self._simulate_h9 else "Connected"
+        """Thin `-> None` wrapper: `BpmSyncMixin` and call sites use this."""
+        self._attempt_connect()
+
+    def _open_transport(self) -> tuple[H9Midi | None, H9Transport]:
+        """Open a transport.
+
+        Single seam: tests replace this one method instead of the MIDI
+        backend, and the simulate-mode path stays a pure in-memory object.
+        """
+        if self._simulate_h9:
+            return None, SimulatedH9Transport(
+                device_id=self._device_id,
+                initial_program=self._simulate_preset,
+            )
+
+        midi = H9Midi(device_prefix=self._device_prefix)
+        midi.connect()
+        return midi, MidiTransport(midi)
+
+    def _attempt_connect(self) -> bool:
+        """Bring up a working connection synchronously.
+
+        Returns True only when the transport is open *and* the initial
+        program dump succeeded; `_last_state.connected` reports the same
+        truth to the UI.
+        """
+        if self._shutting_down:
+            return False
+
+        self._supervisor_timer.stop()
+        self._cancel_waiters(RuntimeError("Disconnected"))
+        self._teardown_connection()
+
+        self._connection_id += 1
+        connection_id = self._connection_id
+        self._connection_state = ConnectionState.CONNECTING
+        self._connection_status = "Connecting…"
+        self._logger.info(
+            "Connecting (connection_id=%d, prefix=%r, simulate=%s)",
+            connection_id,
+            self._device_prefix,
+            self._simulate_h9,
+        )
+        self._emit_connection_status(connected=False, status_text=self._connection_status)
+
+        try:
+            midi, transport = self._open_transport()
+        except Exception as exc:
+            self._logger.exception(
+                "Failed to open transport (connection_id=%d, prefix=%r)",
+                connection_id,
+                self._device_prefix,
+            )
+            self._teardown_connection()
+            self._fail_connect(connection_id, exc)
+            return False
+
+        self._midi = midi
+        self._transport = transport
+        self._connected_device_id = self._device_id
+        self._reset_session_bookkeeping()
+        self._start_rx_thread_if_needed()
+        self._drain_stale_input()
+
+        try:
+            preset = self._request_current_program(timeout_s=_PROGRAM_DUMP_TIMEOUT_S)
+        except Exception as exc:
+            self._logger.warning(
+                "Initial program dump failed (connection_id=%d): %s",
+                connection_id,
+                exc,
+            )
+            self._teardown_connection()
+            self._fail_connect(connection_id, exc)
+            return False
+
+        bpm = self._read_bpm_best_effort()
+        self._connection_state = ConnectionState.CONNECTED
+        self._connection_status = "Simulated H9" if self._simulate_h9 else "Connected"
+        self._backoff.reset()
+        self._consecutive_refresh_failures = 0
+        self._apply_current_program(preset)
+        self._logger.info(
+            "Connected (connection_id=%d, program=%s, bpm=%s)",
+            connection_id,
+            preset.preset_number,
+            bpm,
+        )
+        self._emit_state(self._preset_state(preset, bpm))
+        return True
+
+    def _fail_connect(self, connection_id: int, exc: BaseException) -> None:
+        """Report a failed attempt truthfully and arm the retry timer."""
+        self._connection_state = ConnectionState.DISCONNECTED
+        self._connection_status = f"Connect failed: {exc}"
+        self._logger.warning("Connect failed (connection_id=%d): %s", connection_id, exc)
+        self._emit_connection_status(
+            connected=False, status_text=self._connection_status
+        )
+        self._schedule_retry()
+
+    def _schedule_retry(self) -> None:
+        """Arm the single-shot supervisor timer with the next backoff delay."""
+        if self._simulate_h9 or self._shutting_down:
+            return
+
+        delay = self._backoff.next_delay()
+        self._supervisor_timer.start(int(delay * 1000))
+        self._logger.info(
+            "Retry scheduled in %.0fs (retry_attempt=%d, connection_id=%d)",
+            delay,
+            self._backoff.attempt,
+            self._connection_id,
+        )
+
+    @QtCore.Slot(str)
+    def _on_connection_lost(self, reason: str) -> None:
+        """Single entry point for every loss source (RX, send, port check)."""
+        if (
+            self._shutting_down
+            or self._connection_state is not ConnectionState.CONNECTED
+        ):
+            return
+
+        self._logger.warning(
+            "Connection lost (connection_id=%d, prefix=%r): %s",
+            self._connection_id,
+            self._device_prefix,
+            reason,
+        )
+        self._connection_state = ConnectionState.RECONNECTING
+        self._connection_status = f"Disconnected: {reason}"
+        self._event_refresh_timer.stop()
+        self._cancel_waiters(RuntimeError("Disconnected"))
+        self._teardown_connection()
+        self._consecutive_refresh_failures = 0
+        # Emitted after the transport is gone: `_emit_state` triggers
+        # auto-BPM sync, which must not try to send on a dead handle.
+        self._emit_connection_status(
+            connected=False, status_text=self._connection_status
+        )
+        self._schedule_retry()
+
+    def _teardown_connection(self) -> None:
+        """Stop the RX thread and close the transport. Idempotent."""
+        self._rx_stop.set()
+        thread = self._rx_thread
+        self._rx_thread = None
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=1.0)
+
+        transport = self._transport
+        self._transport = None
+        self._midi = None
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:
+                self._logger.exception("Error while closing transport")
+
+    def _reset_session_bookkeeping(self) -> None:
+        """Forget per-connection state so nothing from the old link leaks in."""
+        self._knob_overrides.clear()
+        self._last_sent_auto_bpm = None
+        self._last_event_refresh_at = 0.0
+        self._last_port_check_at = 0.0
+        self._consecutive_refresh_failures = 0
+        self._preset_detector.reset()
+
+    def _drain_stale_input(self) -> None:
+        """Discard anything the transport buffered before this connection."""
+        transport = self._transport
+        if transport is None:
+            return
+        try:
+            dropped = transport.receive_pending()
+        except Exception:
+            self._logger.debug("Failed to drain stale input", exc_info=True)
+            return
+        if dropped:
+            self._logger.debug("Dropped %d stale input message(s)", len(dropped))
+
+    # ------------------------------------------------------------------
+    # State refresh
+    # ------------------------------------------------------------------
+
+    def _refresh_state(self) -> None:
+        if self._shutting_down or self._transport is None:
+            self._logger.debug("Refresh skipped: no active connection")
+            self._emit_connection_status(
+                connected=False, status_text=self._connection_status
+            )
+            return
+
+        try:
+            self._refresh_state_once()
+        except TimeoutError as exc:
+            self._on_program_dump_timeout(exc)
+        except Exception as exc:
+            self._logger.exception("Refresh failed")
+            if self._transport is None:
+                # A send failure already took the loss path and reported it.
+                return
+            self._emit_state(
+                self._state_from_prev(
+                    connected=self._last_state.connected,
+                    status_text=f"Refresh failed: {exc}",
+                )
+            )
+
+    def _refresh_state_once(self) -> None:
+        self._logger.debug("_refresh_state called")
+        preset = self._request_current_program(timeout_s=_PROGRAM_DUMP_TIMEOUT_S)
+        self._consecutive_refresh_failures = 0
+
+        bpm = self._read_bpm_best_effort()
+        if self._transport is None:
+            # A send failure inside the tempo read already took the loss path;
+            # do not publish a state that claims the connection is still up.
+            return
+
+        # If the preset changed, drop any UI overrides.
+        if (
+            preset.preset_number is not None
+            and preset.preset_number != self._last_state.preset_number
+        ):
+            self._knob_overrides.clear()
+
+        self._apply_current_program(preset)
+        self._emit_state(self._preset_state(preset, bpm))
+
+    def _read_bpm_best_effort(self) -> float | None:
+        """Read the tempo, retrying the idempotent read once.
+
+        A failure must never take the connection down: fall back to the last
+        good value. If the *send* failed, `_on_connection_lost` has already
+        run, so stop immediately instead of retrying against a dead handle.
+        """
+        for attempt in range(1, _BPM_ATTEMPTS + 1):
+            if self._transport is None:
+                return self._sanitize_bpm(None)
+            try:
+                bpm = self._backend.get_bpm(timeout_s=_BPM_TIMEOUT_S)
+            except Exception:
+                self._logger.warning(
+                    "BPM read failed (attempt=%d, connection_id=%d)",
+                    attempt,
+                    self._connection_id,
+                    exc_info=True,
+                )
+                if self._transport is None:
+                    return self._sanitize_bpm(None)
+                continue
+            return self._sanitize_bpm(bpm)
+
+        return self._sanitize_bpm(None)
+
+    def _on_program_dump_timeout(self, exc: BaseException) -> None:
+        """One missed dump is a stall; two in a row mean the link is dead."""
+        self._consecutive_refresh_failures += 1
+        failures = self._consecutive_refresh_failures
+        self._logger.warning(
+            "Program dump timed out (connection_id=%d, consecutive_failures=%d): %s",
+            self._connection_id,
+            failures,
+            exc,
+        )
+
+        if failures >= 2:
+            self._on_connection_lost("No response from H9")
+            return
+
         self._emit_state(
-            DashboardState(
-                connected=False,
-                status_text="Connecting…",
-                lock_delay=self._config.lock_delay,
-                lock_feedback=self._config.lock_feedback,
-                lock_pitch=self._config.lock_pitch,
+            self._state_from_prev(
+                connected=True, status_text="H9 not responding (retrying)"
             )
         )
 
-        try:
-            if self._simulate_h9:
-                midi = None
-                transport = SimulatedH9Transport(
-                    device_id=self._device_id,
-                    initial_program=self._simulate_preset,
-                )
-            else:
-                midi = H9Midi(device_prefix=self._device_prefix)
-                midi.connect()
-                transport = MidiTransport(midi)
+    def _apply_current_program(self, preset: PresetSnapshot) -> None:
+        current_program = self._current_program
+        if preset.preset_number is not None:
+            current_program = max(0, preset.preset_number - 1)
+        self._current_program = current_program
 
-            self._midi = midi
-            self._transport = transport
-            self._connected_device_id = self._device_id
-            self._connection_status = connection_status
-            self._start_rx_thread_if_needed()
+    def _preset_state(
+        self, preset: PresetSnapshot, bpm: float | None
+    ) -> DashboardState:
+        status_text = self._connection_status
+        if bpm is None:
+            # Truthful note: we are connected but have no usable tempo.
+            status_text = f"{status_text} (BPM unavailable)"
 
-            self._emit_state(
-                DashboardState(
-                    connected=True,
-                    status_text=connection_status,
-                    lock_delay=self._config.lock_delay,
-                    lock_feedback=self._config.lock_feedback,
-                    lock_pitch=self._config.lock_pitch,
+        return DashboardState(
+            connected=True,
+            status_text=status_text,
+            preset_number=preset.preset_number,
+            preset_name=preset.preset_name,
+            algorithm_name=preset.algorithm_name,
+            algorithm_key=preset.algorithm_key,
+            bpm=bpm,
+            knobs=tuple(self._build_knobs(preset)),
+            lock_delay=self._config.lock_delay,
+            lock_feedback=self._config.lock_feedback,
+            lock_pitch=self._config.lock_pitch,
+        )
+
+    def _build_knobs(self, preset: PresetSnapshot) -> list[KnobBarState]:
+        knobs: list[KnobBarState] = []
+        if not preset.knobs_by_name:
+            return knobs
+
+        for name in self._config.knob_order:
+            if name not in preset.knobs_by_name:
+                continue
+            override = self._knob_overrides.get(name)
+            raw = int(preset.knobs_by_name[name] if override is None else override)
+            pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
+            pretty = format_knob_value(
+                algorithm_key=preset.algorithm_key,
+                knob_name=name,
+                raw_value=raw,
+            )
+            knobs.append(
+                KnobBarState(
+                    name=name,
+                    percent=max(0, min(100, pct)),
+                    raw_value=raw,
+                    pretty=(pretty.label if pretty is not None else None),
                 )
             )
-        except Exception as exc:
-            self._logger.exception("Failed to connect")
-            self._midi = None
-            self._transport = None
-            self._connection_status = f"Connect failed: {exc}"
-            self._emit_state(
-                DashboardState(
-                    connected=False,
-                    status_text=f"Connect failed: {exc}",
-                    lock_delay=self._config.lock_delay,
-                    lock_feedback=self._config.lock_feedback,
-                    lock_pitch=self._config.lock_pitch,
-                )
-            )
+        return knobs
 
-    def _refresh_state(self) -> None:
-        try:
-            self._logger.debug(f"_refresh_state called")
-            preset = self._request_current_program(timeout_s=2.0)
+    def _state_from_prev(self, *, connected: bool, status_text: str) -> DashboardState:
+        """Keep the last preset snapshot so the UI can grey it out."""
+        prev = self._last_state
+        return DashboardState(
+            connected=connected,
+            status_text=status_text,
+            preset_number=prev.preset_number,
+            preset_name=prev.preset_name,
+            algorithm_name=prev.algorithm_name,
+            algorithm_key=prev.algorithm_key,
+            bpm=prev.bpm,
+            knobs=prev.knobs,
+            lock_delay=self._config.lock_delay,
+            lock_feedback=self._config.lock_feedback,
+            lock_pitch=self._config.lock_pitch,
+        )
 
-            # If the preset changed, drop any UI overrides.
-            if (
-                preset.preset_number is not None
-                and preset.preset_number != self._last_state.preset_number
-            ):
-                self._knob_overrides.clear()
-
-            bpm: float | None = None
-            try:
-                bpm = self._backend.get_bpm(timeout_s=1.0)
-            except Exception:
-                bpm = None
-            bpm = self._sanitize_bpm(bpm)
-
-            current_program = self._current_program
-            if preset.preset_number is not None:
-                current_program = max(0, preset.preset_number - 1)
-            self._current_program = current_program
-
-            knobs: list[KnobBarState] = []
-            wanted_order = self._config.knob_order
-            if preset.knobs_by_name:
-                for name in wanted_order:
-                    if name not in preset.knobs_by_name:
-                        continue
-                    override = self._knob_overrides.get(name)
-                    raw = int(
-                        preset.knobs_by_name[name] if override is None else override
-                    )
-                    pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
-                    pretty = format_knob_value(
-                        algorithm_key=preset.algorithm_key,
-                        knob_name=name,
-                        raw_value=raw,
-                    )
-                    knobs.append(
-                        KnobBarState(
-                            name=name,
-                            percent=max(0, min(100, pct)),
-                            raw_value=raw,
-                            pretty=(pretty.label if pretty is not None else None),
-                        )
-                    )
-
-            self._emit_state(
-                DashboardState(
-                    connected=True,
-                    status_text=self._connection_status,
-                    preset_number=preset.preset_number,
-                    preset_name=preset.preset_name,
-                    algorithm_name=preset.algorithm_name,
-                    algorithm_key=preset.algorithm_key,
-                    bpm=bpm,
-                    knobs=tuple(knobs),
-                    lock_delay=self._config.lock_delay,
-                    lock_feedback=self._config.lock_feedback,
-                    lock_pitch=self._config.lock_pitch,
-                )
-            )
-        except Exception as exc:
-            self._logger.exception("Refresh failed")
-            prev = self._last_state
-            self._emit_state(
-                DashboardState(
-                    connected=prev.connected,
-                    status_text=f"Refresh failed: {exc}",
-                    preset_number=prev.preset_number,
-                    preset_name=prev.preset_name,
-                    algorithm_name=prev.algorithm_name,
-                    algorithm_key=prev.algorithm_key,
-                    bpm=prev.bpm,
-                    knobs=prev.knobs,
-                    lock_delay=self._config.lock_delay,
-                    lock_feedback=self._config.lock_feedback,
-                    lock_pitch=self._config.lock_pitch,
-                )
-            )
+    def _emit_connection_status(self, *, connected: bool, status_text: str) -> None:
+        self._emit_state(
+            self._state_from_prev(connected=connected, status_text=status_text)
+        )
 
     def _change_preset(self, *, delta: int) -> None:
         if self._transport is None:
@@ -758,6 +1048,9 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         worker thread's event loop instead (the worker is a QObject that
         lives on that thread).
 
+        The scheduled call captures the connection generation so a refresh
+        armed before a reconnect cannot run against the new connection.
+
         The simulated transport answers instantly and tests drive the
         worker without a running Qt event loop (timers would never fire),
         so it refreshes synchronously.
@@ -765,7 +1058,26 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         if self._simulate_h9:
             self._refresh_state()
             return
-        QtCore.QTimer.singleShot(_PRESET_SETTLE_MS, self._refresh_state)
+
+        generation = self._connection_id
+        QtCore.QTimer.singleShot(
+            _PRESET_SETTLE_MS, lambda: self._refresh_if_current(generation)
+        )
+
+    def _refresh_if_current(self, generation: int) -> None:
+        """Run a scheduled refresh only for the connection that armed it."""
+        if (
+            self._shutting_down
+            or generation != self._connection_id
+            or self._transport is None
+        ):
+            self._logger.debug(
+                "Skipping stale scheduled refresh (generation=%d, current=%d)",
+                generation,
+                self._connection_id,
+            )
+            return
+        self._refresh_state()
 
     def _emit_state(self, state: DashboardState) -> None:
         # self._logger.debug(f"_emit_state called: {state}")
@@ -837,25 +1149,46 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         if self._rx_thread is not None and self._rx_thread.is_alive():
             return
 
-        self._rx_stop.clear()
+        # A fresh stop event per connection: a lingering thread from a
+        # previous connection keeps its own (already set) event and can never
+        # be revived by the new one.
+        stop_event = threading.Event()
+        self._rx_stop = stop_event
         self._rx_thread = threading.Thread(
-            target=self._rx_loop, name="h9-rx", daemon=True
+            target=self._rx_loop,
+            args=(stop_event,),
+            name=f"h9-rx-{self._connection_id}",
+            daemon=True,
         )
         self._rx_thread.start()
 
-    def _rx_loop(self) -> None:
-        self._logger.info("RX loop started")
-        while not self._rx_stop.is_set():
+    def _rx_loop(self, stop_event: threading.Event) -> None:
+        connection_id = self._connection_id
+        self._logger.info("RX loop started (connection_id=%d)", connection_id)
+        while not stop_event.is_set():
             transport = self._transport
             if transport is None:
                 time.sleep(0.05)
                 continue
 
-            msgs = transport.receive_pending()
+            try:
+                msgs = transport.receive_pending()
+            except Exception as exc:
+                self._logger.error(
+                    "RX failed (connection_id=%d, prefix=%r): %s",
+                    connection_id,
+                    self._device_prefix,
+                    exc,
+                    exc_info=True,
+                )
+                self._report_rx_failure(connection_id, stop_event, str(exc))
+                break
+
             has_traffic = bool(msgs)
             for msg in msgs:
                 frame = decode_eventide_sysex(msg)
                 if frame is None:
+                    # Malformed / foreign frame: discard, never fatal.
                     continue
 
                 if frame.device_id not in (0, self._connected_device_id):
@@ -869,30 +1202,97 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                 ):
                     self.preset_change_detected.emit()
 
+            if not has_traffic and not self._port_still_present(transport):
+                self._logger.warning(
+                    "MIDI port disappeared (connection_id=%d, prefix=%r)",
+                    connection_id,
+                    self._device_prefix,
+                )
+                self._report_rx_failure(
+                    connection_id, stop_event, "MIDI port disappeared"
+                )
+                break
+
             with self._waiters_lock:
                 await_frame = bool(self._waiters)
 
             # Poll quickly while a SysEx response is being awaited or the
             # device is streaming (keeps waiter latency low); back off when
             # idle to cut CPU churn on the Pi.
-            time.sleep(0.005 if (has_traffic or await_frame) else 0.02)
-        self._logger.info("RX loop stopped")
+            time.sleep(
+                _RX_BUSY_SLEEP_S if (has_traffic or await_frame) else _RX_IDLE_SLEEP_S
+            )
+        self._logger.info("RX loop stopped (connection_id=%d)", connection_id)
+
+    def _report_rx_failure(
+        self,
+        connection_id: int,
+        stop_event: threading.Event,
+        reason: str,
+    ) -> None:
+        """Report an RX fault only when it belongs to the current connection.
+
+        A thread from a previous connection can still raise while it is being
+        torn down (its transport is closed underneath it). If that report
+        reached the worker it would cancel the *new* connection's waiters or
+        tear the new connection down, so stale reports are dropped.
+        """
+        if stop_event.is_set() or connection_id != self._connection_id:
+            self._logger.debug(
+                "Ignoring RX failure from stale connection "
+                "(connection_id=%d, current=%d)",
+                connection_id,
+                self._connection_id,
+            )
+            return
+
+        # Release the worker thread *now*: it may be blocked in
+        # `_wait_for_frame` and a queued slot cannot preempt it.
+        self._cancel_waiters(RuntimeError("Disconnected"))
+        self._connection_lost.emit(reason)
+
+    def _port_still_present(self, transport: H9Transport) -> bool:
+        """Check port presence at most every `_PORT_CHECK_INTERVAL_S`."""
+        now = time.monotonic()
+        if (now - self._last_port_check_at) < _PORT_CHECK_INTERVAL_S:
+            return True
+        self._last_port_check_at = now
+
+        is_present = getattr(transport, "is_port_present", None)
+        if is_present is None:
+            return True
+        try:
+            return bool(is_present())
+        except Exception:
+            self._logger.debug("Port presence check failed", exc_info=True)
+            return True
 
     def _try_deliver_to_waiters(self, frame: SysexFrame) -> bool:
+        current_id = self._connection_id
         with self._waiters_lock:
-            for idx, waiter in enumerate(list(self._waiters)):
+            for waiter in list(self._waiters):
+                if waiter.connection_id != current_id:
+                    # Created for a previous connection: never satisfy it.
+                    self._waiters.remove(waiter)
+                    waiter.cancel(RuntimeError("Disconnected"))
+                    continue
                 if waiter.try_set(frame):
-                    try:
-                        self._waiters.pop(idx)
-                    except IndexError:
-                        pass
+                    self._waiters.remove(waiter)
                     return True
         return False
+
+    def _cancel_waiters(self, exc: BaseException) -> None:
+        """Release every waiter. Safe from any thread; safe to call twice."""
+        with self._waiters_lock:
+            waiters = self._waiters
+            self._waiters = []
+        for waiter in waiters:
+            waiter.cancel(exc)
 
     def _wait_for_frame(
         self, predicate: Callable[[SysexFrame], bool], *, timeout_s: float
     ) -> SysexFrame:
-        waiter = _FrameWaiter(predicate)
+        waiter = _FrameWaiter(predicate, connection_id=self._connection_id)
         with self._waiters_lock:
             self._waiters.append(waiter)
 
@@ -903,25 +1303,71 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         with self._waiters_lock:
             if waiter in self._waiters:
                 self._waiters.remove(waiter)
+
+        # A cancel means the connection died (or we are shutting down); a
+        # plain timeout means the device did not answer.
+        waiter.raise_if_cancelled()
         raise TimeoutError("Timed out waiting for matching SysEx response")
 
     def _send_eventide(self, command: int, payload: bytes = b"") -> None:
-        if self._transport is None:
+        transport = self._transport
+        if transport is None:
             raise RuntimeError("Not connected")
+
         msg = build_eventide_sysex(self._connected_device_id, command, payload)
-        self._transport.send_sysex(msg)
+        try:
+            transport.send_sysex(msg)
+        except Exception as exc:
+            self._logger.error(
+                "Send failed (connection_id=%d, command=0x%02X): %s",
+                self._connection_id,
+                command,
+                exc,
+                exc_info=True,
+            )
+            # Already on the worker thread: report the loss immediately so the
+            # caller's exception reaches an already-disconnected state.
+            self._on_connection_lost(str(exc))
+            raise
 
     def _request_current_program(self, *, timeout_s: float) -> PresetSnapshot:
-        self._logger.info("Requesting current program")
-        self._send_eventide(H9SysexCodes.SYSEXC_TJ_PROGRAM_WANT)
+        """Request the program dump, retrying the idempotent read once.
 
-        frame = self._wait_for_frame(
-            lambda f: f.command == H9SysexCodes.SYSEXC_TJ_PROGRAM_DUMP,
-            timeout_s=timeout_s,
-        )
+        Only this read is retried: relative commands (next/prev/knob deltas)
+        and VALUE_PUT must never be replayed.
+        """
+        last_timeout: TimeoutError | None = None
+        for attempt in range(1, _PROGRAM_DUMP_ATTEMPTS + 1):
+            started = time.monotonic()
+            self._logger.info(
+                "Requesting current program (attempt=%d, connection_id=%d)",
+                attempt,
+                self._connection_id,
+            )
+            self._send_eventide(H9SysexCodes.SYSEXC_TJ_PROGRAM_WANT)
 
-        raw_text = frame.payload.decode("ascii", errors="replace")
-        return parse_preset_dump_text(raw_text)
+            try:
+                frame = self._wait_for_frame(
+                    lambda f: f.command == H9SysexCodes.SYSEXC_TJ_PROGRAM_DUMP,
+                    timeout_s=timeout_s,
+                )
+            except TimeoutError as exc:
+                last_timeout = exc
+                self._logger.warning(
+                    "Program dump timed out (attempt=%d, connection_id=%d, "
+                    "elapsed=%.2fs)",
+                    attempt,
+                    self._connection_id,
+                    time.monotonic() - started,
+                )
+                continue
+
+            raw_text = frame.payload.decode("ascii", errors="replace")
+            return parse_preset_dump_text(raw_text)
+
+        if last_timeout is not None:
+            raise last_timeout
+        raise TimeoutError("Timed out waiting for matching SysEx response")
 
     @QtCore.Slot()
     def _on_preset_change_detected(self) -> None:

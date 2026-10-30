@@ -237,11 +237,13 @@ def test_refresh_after_shutdown_emits_error_state(sim_worker: H9DeviceWorker) ->
     sim_worker.connect_or_refresh()
     sim_worker.shutdown()
 
+    # A refresh after shutdown must report the truth (disconnected) instead of
+    # keeping connected=True with a "Refresh failed:" note.
     sim_worker._refresh_state()
 
     state = sim_worker._last_state
-    assert state.status_text.startswith("Refresh failed:")
-    assert state.connected is True
+    assert state.status_text == "Disconnected"
+    assert state.connected is False
     assert state.preset_name == "PRISTINE DIGITAL"
 
 

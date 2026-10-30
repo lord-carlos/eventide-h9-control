@@ -115,6 +115,10 @@ class SimulatedH9Transport:
     def close(self) -> None:
         self._closed = True
 
+    def is_port_present(self) -> bool:
+        """The in-memory H9 is always "available" while it exists."""
+        return True
+
     def send_sysex(self, framed_or_unframed: Sequence[int] | bytes | bytearray) -> None:
         if self._closed:
             raise RuntimeError("Simulated H9 is closed")
