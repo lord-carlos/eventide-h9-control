@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState
-from h9control.domain.algorithms import H9FullAlgorithmData
+from h9control.domain.algorithms import human_algorithm_name
 
 
 # === CONFIGURATION CONSTANTS ===
@@ -261,27 +261,6 @@ class _MetricButton(QtWidgets.QPushButton):
         self._value.setText(value)
 
 
-def _human_algorithm_name(
-    algorithm_key: str | None, algorithm_name: str | None
-) -> str:
-    """Prefer a readable algorithm name while retaining the H9 key separately."""
-    key = (algorithm_key or "").strip()
-    name = (algorithm_name or "").strip()
-    if name and (not key or name.upper() != key.upper()):
-        return name
-
-    if key:
-        display_names = H9FullAlgorithmData.get_info(key).get("display_names", [])
-        for candidate in reversed(display_names):
-            if candidate.upper() != key.upper() and " " in candidate:
-                return candidate
-        for candidate in display_names:
-            if candidate.upper() != key.upper():
-                return candidate
-
-    return name or key or "—"
-
-
 class DashboardWidget(QtWidgets.QWidget):
     connect_refresh_requested = QtCore.Signal()
     next_requested = QtCore.Signal()
@@ -295,6 +274,7 @@ class DashboardWidget(QtWidgets.QWidget):
     adjust_knob_slot_requested = QtCore.Signal(int, int)  # slot_index, delta
     adjust_bpm_requested = QtCore.Signal(int)
     sync_live_bpm_requested = QtCore.Signal()
+    all_knobs_requested = QtCore.Signal()
     settings_requested = QtCore.Signal()
 
     def __init__(self, config: ConfigManager | None = None) -> None:
@@ -324,6 +304,14 @@ class DashboardWidget(QtWidgets.QWidget):
         self._preset_number.setFont(fonts.status)
         self._preset_number.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self._preset_number.setMinimumWidth(72)
+
+        self._btn_knobs = QtWidgets.QPushButton("ALL KNOBS")
+        self._btn_knobs.setObjectName("all-knobs-button")
+        self._btn_knobs.setFont(fonts.button)
+        self._btn_knobs.setMinimumSize(140, 42)
+        self._btn_knobs.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._btn_knobs.setAccessibleName("All knobs")
+        self._btn_knobs.clicked.connect(self.all_knobs_requested.emit)
 
         self._btn_settings = QtWidgets.QPushButton("SETTINGS")
         self._btn_settings.setObjectName("settings-button")
@@ -405,6 +393,7 @@ class DashboardWidget(QtWidgets.QWidget):
         header_actions_layout.setContentsMargins(0, 0, 0, 0)
         header_actions_layout.setSpacing(10)
         header_actions_layout.addWidget(self._preset_number)
+        header_actions_layout.addWidget(self._btn_knobs)
         header_actions_layout.addWidget(self._btn_settings)
 
         header_layout.addWidget(
@@ -524,15 +513,17 @@ class DashboardWidget(QtWidgets.QWidget):
                 background: transparent;
                 padding: 0;
             }
-            QPushButton#settings-button, QPushButton#nav-button,
-            QPushButton#metric-button {
+            QPushButton#settings-button, QPushButton#all-knobs-button,
+            QPushButton#nav-button, QPushButton#metric-button {
                 color: palette(button-text);
                 background-color: palette(button);
                 border: 1px solid palette(mid);
                 border-radius: 7px;
                 padding: 6px;
             }
-            QPushButton#settings-button:pressed, QPushButton#nav-button:pressed,
+            QPushButton#settings-button:pressed,
+            QPushButton#all-knobs-button:pressed,
+            QPushButton#nav-button:pressed,
             QPushButton#metric-button:pressed {
                 background-color: palette(highlight);
                 color: palette(highlighted-text);
@@ -564,6 +555,7 @@ class DashboardWidget(QtWidgets.QWidget):
             "prev_preset": lambda: self.prev_requested.emit(),
             "connect_refresh": lambda: self.connect_refresh_requested.emit(),
             "settings": lambda: self.settings_requested.emit(),
+            "show_all_knobs": lambda: self.all_knobs_requested.emit(),
             "sync_live_bpm": lambda: self.sync_live_bpm_requested.emit(),
             "adjust_bpm_up": lambda: self.adjust_bpm_requested.emit(+1),
             "adjust_bpm_down": lambda: self.adjust_bpm_requested.emit(-1),
@@ -690,7 +682,7 @@ class DashboardWidget(QtWidgets.QWidget):
             self._preset_number.setText(f"P{state.preset_number:03d}")
 
         self._preset_name.setText(state.preset_name or "—")
-        display_name = _human_algorithm_name(
+        display_name = human_algorithm_name(
             state.algorithm_key, state.algorithm_name
         )
         self._algorithm_name.setText(display_name)
@@ -752,6 +744,7 @@ class DashboardWidget(QtWidgets.QWidget):
         widget.set_enabled(enabled)
 
 
+from h9control.app.ui.qt_knobs import KnobPageWidget
 from h9control.app.ui.qt_settings import SettingsWidget
 
 
@@ -767,15 +760,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.dashboard = DashboardWidget(config)
         self.settings = SettingsWidget(config)
+        self.knobs = KnobPageWidget()
 
         self.stack.addWidget(self.dashboard)
         self.stack.addWidget(self.settings)
+        self.stack.addWidget(self.knobs)
 
         self.dashboard.settings_requested.connect(self._show_settings)
+        self.dashboard.all_knobs_requested.connect(self._show_knob_page)
         self.settings.back_requested.connect(self._show_dashboard)
+        self.knobs.back_requested.connect(self._show_dashboard)
 
     def _show_settings(self) -> None:
         self.stack.setCurrentWidget(self.settings)
+
+    def _show_knob_page(self) -> None:
+        self.stack.setCurrentWidget(self.knobs)
+
+    def show_knob_page(self) -> None:
+        """Public entry point for GPIO/rotary bindings owned by the worker."""
+        self._show_knob_page()
 
     def _show_dashboard(self) -> None:
         self.stack.setCurrentWidget(self.dashboard)

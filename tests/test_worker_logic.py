@@ -5,6 +5,7 @@ import pytest
 from h9control.app.config import ConfigManager
 from h9control.app.state import DashboardState
 from h9control.app.ui.qt_worker import H9DeviceWorker, _FrameWaiter, _PresetChangeDetector
+from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
 from h9control.protocol.sysex import SysexFrame
 
 
@@ -117,6 +118,85 @@ def test_feedback_knob_uses_coarse_5_percent_step(sim_worker: H9DeviceWorker) ->
     # 0x4800 + 1637 = 20069 -> CC 78 -> back to 14-bit = round(78/127*0x7FE0).
     expected = int(round((78 / 127.0) * 32736))
     assert state.knobs[2].raw_value == expected
+
+
+def test_connect_exposes_all_ten_knobs_in_cc_order(
+    sim_worker: H9DeviceWorker,
+) -> None:
+    sim_worker.connect_or_refresh()
+
+    state = sim_worker._last_state
+    assert [k.name for k in state.all_knobs] == [
+        "MIX",
+        "DLYMIX",
+        "DLY-A",
+        "DLY-B",
+        "FBK-A",
+        "FBK-B",
+        "XFADE",
+        "DEPTH",
+        "SPEED",
+        "FILTER",
+    ]
+    # The dashboard view stays at the four configured slots.
+    assert [k.name for k in state.knobs] == ["DLY-A", "DLY-B", "FBK-A", "FBK-B"]
+    # Simulated DIGDLY preset: DLY-A is 0x2400.
+    assert state.all_knobs[2].raw_value == 0x2400
+
+
+def test_adjust_knob_outside_dashboard_slots(sim_worker: H9DeviceWorker) -> None:
+    sim_worker.connect_or_refresh()
+    before = sim_worker._last_state.all_knobs[9].raw_value
+
+    sim_worker.adjust_knob("FILTER", 1)
+
+    state = sim_worker._last_state
+    assert state.all_knobs[9].raw_value > before
+    assert "FILTER" in sim_worker._knob_overrides
+
+
+def test_set_knob_value_sets_absolute_cc(sim_worker: H9DeviceWorker) -> None:
+    sim_worker.connect_or_refresh()
+
+    sim_worker.set_knob_value("MIX", 0)
+    assert sim_worker._last_state.all_knobs[0].raw_value == 0
+    assert sim_worker._knob_overrides["MIX"] == 0
+
+    sim_worker.set_knob_value("MIX", 127)
+    assert (
+        sim_worker._last_state.all_knobs[0].raw_value == MAX_KNOB_VALUE_14BIT
+    )
+    assert sim_worker._last_state.all_knobs[0].percent == 100
+
+
+def test_set_knob_value_clamps_and_ignores_unknown(sim_worker: H9DeviceWorker) -> None:
+    sim_worker.connect_or_refresh()
+
+    sim_worker.set_knob_value("MIX", 999)
+    assert sim_worker._last_state.all_knobs[0].percent == 100
+
+    sim_worker.set_knob_value("MIX", -5)
+    assert sim_worker._last_state.all_knobs[0].raw_value == 0
+
+    sim_worker.set_knob_value("BOGUS", 64)
+    assert all(k.name != "BOGUS" for k in sim_worker._last_state.all_knobs)
+    assert sim_worker._last_state.all_knobs[0].raw_value == 0
+
+
+def test_set_knob_value_respects_delay_lock(
+    config: ConfigManager, qapp,
+) -> None:
+    config.lock_delay = True
+    worker = _make_worker(config)
+    try:
+        worker.connect_or_refresh()
+        worker.set_knob_value("DLY-A", 64)
+
+        assert worker._knob_overrides["DLY-A"] == worker._knob_overrides["DLY-B"]
+        by_name = {k.name: k for k in worker._last_state.all_knobs}
+        assert by_name["DLY-A"].raw_value == by_name["DLY-B"].raw_value
+    finally:
+        worker.shutdown()
 
 
 def test_knob_overrides_cleared_on_preset_change(sim_worker: H9DeviceWorker) -> None:

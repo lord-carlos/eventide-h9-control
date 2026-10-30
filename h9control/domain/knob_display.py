@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from h9control.domain.knob_control import (
+    MAX_MIDI_CC_VALUE,
+    midi_cc_from_raw,
+    raw_from_midi_cc,
+)
 from h9control.protocol.codes import MAX_KNOB_VALUE_14BIT
-
-
-# MIDI CC range (0-127)
-MAX_MIDI_CC_VALUE = 127
 
 
 class TimeDivision(Enum):
@@ -96,16 +97,6 @@ def _pct_from_raw(value: int) -> float:
     return (value / MAX_KNOB_VALUE_14BIT) * 100.0
 
 
-def _midi_cc_from_raw(value: int) -> int:
-    """Convert raw 14-bit knob value to MIDI CC value (0-127)."""
-    return int(round((value / MAX_KNOB_VALUE_14BIT) * MAX_MIDI_CC_VALUE))
-
-
-def _raw_from_midi_cc(midi_cc: int) -> int:
-    """Convert MIDI CC value (0-127) to raw 14-bit knob value."""
-    return int(round((midi_cc / MAX_MIDI_CC_VALUE) * MAX_KNOB_VALUE_14BIT))
-
-
 def _pct_from_midi_cc(midi_cc: int) -> float:
     """Convert MIDI CC value (0-127) to percentage (0-100)."""
     return (midi_cc / MAX_MIDI_CC_VALUE) * 100.0
@@ -116,7 +107,7 @@ def quantize_timefactor_delay_note(value: int) -> TimeDivision:
     
     Uses the MIDI CC-based mapping in _TIMEFACTOR_DELAY_NOTE_POINTS.
     """
-    midi_cc = _midi_cc_from_raw(value)
+    midi_cc = midi_cc_from_raw(value)
     best_div = _TIMEFACTOR_DELAY_NOTE_POINTS[0][1]
     best_dist = float("inf")
     for point_cc, div in _TIMEFACTOR_DELAY_NOTE_POINTS:
@@ -233,5 +224,5 @@ def step_timefactor_delay_note_raw(current_raw: int, *, delta: int) -> int:
 
     new_idx = max(0, min(len(divisions) - 1, idx + (1 if delta > 0 else -1)))
     target_midi_cc = _TIMEFACTOR_DELAY_NOTE_POINTS[new_idx][0]
-    target_raw = _raw_from_midi_cc(target_midi_cc)
+    target_raw = raw_from_midi_cc(target_midi_cc)
     return max(0, min(MAX_KNOB_VALUE_14BIT, target_raw))

@@ -15,7 +15,13 @@ from h9control.app.connection import ConnectionState, RetryBackoff
 from h9control.app.state import DashboardState, KnobBarState
 from h9control.app.h9_backend import H9Backend
 from h9control.app.preset_jump import PresetJump
-from h9control.domain.algorithms import H9FullAlgorithmData
+from h9control.domain.knob_control import (
+    knob_cc_number,
+    midi_cc_from_raw,
+    ordered_knob_names,
+    percent_from_raw,
+    raw_from_midi_cc,
+)
 from h9control.domain.knob_display import (
     format_knob_value,
     step_timefactor_delay_note_raw,
@@ -130,9 +136,34 @@ class _PresetChangeDetector:
         return len(unique) >= 2
 
 
+def _build_knob_state(
+    *,
+    name: str,
+    raw_value: int,
+    algorithm_key: str | None,
+    fallback_pretty: str | None = None,
+) -> KnobBarState:
+    """Build one knob view model from a raw 14-bit value."""
+    raw = max(0, min(MAX_KNOB_VALUE_14BIT, int(raw_value)))
+    pretty = format_knob_value(
+        algorithm_key=algorithm_key,
+        knob_name=name,
+        raw_value=raw,
+    )
+    return KnobBarState(
+        name=name,
+        percent=max(0, min(100, percent_from_raw(raw))),
+        raw_value=raw,
+        pretty=(pretty.label if pretty is not None else fallback_pretty),
+    )
+
+
 class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
     state_changed = QtCore.Signal(object)
     preset_change_detected = QtCore.Signal()
+    # Emitted when a configured GPIO/rotary binding asks for the full-knob
+    # page. The UI layer owns page switching, so the worker only reports intent.
+    all_knobs_requested = QtCore.Signal()
 
     # Emitted by the RX thread when it dies (USB unplug, backend error); the
     # connected slot performs the teardown on the worker thread.
@@ -144,6 +175,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
     _gpio_prev_preset_signal = QtCore.Signal()
     _gpio_connect_refresh_signal = QtCore.Signal()
     _gpio_sync_live_bpm_signal = QtCore.Signal()
+    _gpio_all_knobs_signal = QtCore.Signal()
     _gpio_adjust_bpm_signal = QtCore.Signal(int)
     _gpio_jump_to_preset_1_signal = QtCore.Signal()
     _gpio_jump_to_preset_2_signal = QtCore.Signal()
@@ -237,6 +269,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         self._gpio_prev_preset_signal.connect(self.prev_preset)
         self._gpio_connect_refresh_signal.connect(self.connect_or_refresh)
         self._gpio_sync_live_bpm_signal.connect(self.sync_live_bpm)
+        self._gpio_all_knobs_signal.connect(self.all_knobs_requested.emit)
         self._gpio_adjust_bpm_signal.connect(self.adjust_bpm)
         self._gpio_jump_to_preset_1_signal.connect(lambda: self.jump_to_preset(0))
         self._gpio_jump_to_preset_2_signal.connect(lambda: self.jump_to_preset(1))
@@ -270,6 +303,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
             "prev_preset": lambda: self._gpio_prev_preset_signal.emit(),
             "connect_refresh": lambda: self._gpio_connect_refresh_signal.emit(),
             "sync_live_bpm": lambda: self._gpio_sync_live_bpm_signal.emit(),
+            "show_all_knobs": lambda: self._gpio_all_knobs_signal.emit(),
             "adjust_bpm_up": lambda: self._gpio_adjust_bpm_signal.emit(1),
             "adjust_bpm_down": lambda: self._gpio_adjust_bpm_signal.emit(-1),
             "adjust_knob_1_up": lambda: self._gpio_adjust_knob_slot_signal.emit(0, 1),
@@ -463,6 +497,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                     algorithm_key=prev.algorithm_key,
                     bpm=prev.bpm,
                     knobs=prev.knobs,
+                    all_knobs=prev.all_knobs,
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
                     lock_pitch=self._config.lock_pitch,
@@ -471,36 +506,33 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
 
     @QtCore.Slot(str, int)
     def adjust_knob(self, knob_name: str, delta: int) -> None:
-        """Keyboard-driven knob tweak.
+        """Step any knob of the current preset by `delta` and send MIDI CC.
 
-        Updates the UI model in discrete steps and pushes the change to the pedal
-        via MIDI CC.
-
-        Supports any knob name from the current preset. Lock behavior applies to
-        DLY-A/B and FBK-A/B pairs when enabled.
+        Works for every knob exposed in `all_knobs`, not only the four
+        dashboard slots. Lock behavior applies to DLY-A/B, FBK-A/B and
+        PICH-A/B pairs when enabled.
         """
 
         name = knob_name.strip().upper()
-
-        # Validate that the knob exists in the current state
-        knob_exists = any(k.name.upper() == name for k in self._last_state.knobs)
-        if not knob_exists:
+        if not self._knob_exists(name):
             return
 
-        # Check if lock mode is enabled and apply to both channels
-        knobs_to_adjust = [name]
-        if self._config.lock_delay and name in {"DLY-A", "DLY-B"}:
-            # When delay is locked, adjust both A and B
-            knobs_to_adjust = ["DLY-A", "DLY-B"]
-        elif self._config.lock_feedback and name in {"FBK-A", "FBK-B"}:
-            # When feedback is locked, adjust both A and B
-            knobs_to_adjust = ["FBK-A", "FBK-B"]
-        elif self._config.lock_pitch and name in {"PICH-A", "PICH-B"}:
-            # When pitch is locked, adjust both A and B
-            knobs_to_adjust = ["PICH-A", "PICH-B"]
-
-        for knob in knobs_to_adjust:
+        for knob in self._knobs_to_adjust(name):
             self._adjust_single_knob(knob, delta)
+
+        self._emit_state(self._state_with_overrides())
+
+    @QtCore.Slot(str, int)
+    def set_knob_value(self, knob_name: str, cc_value: int) -> None:
+        """Set a knob to an absolute CC value (0-127), e.g. from the knob page."""
+
+        name = knob_name.strip().upper()
+        if not self._knob_exists(name):
+            return
+
+        target = max(0, min(127, int(cc_value)))
+        for knob in self._knobs_to_adjust(name):
+            self._set_single_knob(knob, target)
 
         self._emit_state(self._state_with_overrides())
 
@@ -523,6 +555,35 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         self._logger.debug(f"Adjusting knob '{knob_name}' by {delta}")
         self.adjust_knob(knob_name, delta)
 
+    def _knob_exists(self, name: str) -> bool:
+        """True when `name` belongs to the current preset (all knobs count)."""
+        name = name.upper()
+        return any(
+            k.name.upper() == name
+            for k in (*self._last_state.all_knobs, *self._last_state.knobs)
+        )
+
+    def _knobs_to_adjust(self, name: str) -> list[str]:
+        """Expand a knob name to the pair when its lock is enabled."""
+        name = name.upper()
+        if self._config.lock_delay and name in {"DLY-A", "DLY-B"}:
+            return ["DLY-A", "DLY-B"]
+        if self._config.lock_feedback and name in {"FBK-A", "FBK-B"}:
+            return ["FBK-A", "FBK-B"]
+        if self._config.lock_pitch and name in {"PICH-A", "PICH-B"}:
+            return ["PICH-A", "PICH-B"]
+        return [name]
+
+    def _current_knob_raw(self, name: str) -> int | None:
+        """Current raw value, preferring the pending UI override."""
+        name = name.upper()
+        if name in self._knob_overrides:
+            return self._knob_overrides[name]
+        for knob in (*self._last_state.all_knobs, *self._last_state.knobs):
+            if knob.name.upper() == name:
+                return int(knob.raw_value)
+        return None
+
     def _adjust_single_knob(self, name: str, delta: int) -> None:
         """Adjust a single knob and send MIDI CC."""
         algo_key = (self._last_state.algorithm_key or "").upper()
@@ -531,15 +592,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
             f"_adjust_single_knob: name={name}, delta={delta}, algo_key={algo_key or 'NONE'}"
         )
 
-        # Determine current raw value.
-        current_raw: int | None = None
-        if name in self._knob_overrides:
-            current_raw = self._knob_overrides[name]
-        else:
-            for k in self._last_state.knobs:
-                if k.name.upper() == name:
-                    current_raw = int(getattr(k, "raw_value", 0))
-                    break
+        current_raw = self._current_knob_raw(name)
         if current_raw is None:
             self._logger.warning(f"Could not find current value for knob '{name}'")
             return
@@ -562,68 +615,54 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                 ),
             )
 
-        # Convert the 14-bit raw value to the 7-bit MIDI CC grid (0-127).
-        # The H9 sets knob values via 7-bit CC, so its internal 14-bit value
-        # lands on that coarser grid, not on the exact `new_raw` we compute.
-        cc_value = max(0, min(127, int(round((new_raw / MAX_KNOB_VALUE_14BIT) * 127.0))))
+        self._set_single_knob(name, midi_cc_from_raw(new_raw))
+
+    def _set_single_knob(self, name: str, cc_value: int) -> None:
+        """Send one CC value for a knob and record the resulting override."""
+        cc_value = max(0, min(127, int(cc_value)))
+        self._send_knob_cc(name, cc_value)
+
+        # Store the override on the 7-bit grid the device actually received.
+        # Storing the raw 14-bit value would leave the UI showing a value the
+        # device does not have, and repeated small adjustments would never
+        # converge. When nothing was sent (no transport/unmapped knob) the
+        # same CC value is used so overrides stay on one consistent grid.
+        self._knob_overrides[name] = raw_from_midi_cc(cc_value)
+
+    def _send_knob_cc(self, name: str, cc_value: int) -> bool:
+        """Send a knob CC. Returns True when it was actually written."""
+        algo_key = (self._last_state.algorithm_key or "").upper()
+        cc_number = knob_cc_number(algo_key, name)
+        if cc_number is None:
+            self._logger.debug(
+                "Knob '%s' is not mapped to a CC for algo '%s'", name, algo_key
+            )
+            return False
 
         # Effect knobs are controlled via MIDI CC. The 0x200 SysEx keys are
         # system-variable byte parameters, not current preset knob values.
-        #
-        # CC numbers follow the H9's hardware knob row, but ALGO_MAP lists
-        # knob names bottom-left → top-left (i.e. most prominent knob last),
-        # so the list must be reversed before indexing: after reversal,
-        # DLY-A is knob #3 → CC 21+3 = 24, matching the H9's real mapping
-        # verified empirically with scripts/test_delay_cc.py (CC 24 changes
-        # Delay A time, CC 25 changes Delay B time).
+        # See `h9control.domain.knob_control` for the CC mapping.
         if self._transport is None:
             self._connect()
-        if self._transport is not None and algo_key:
-            self._logger.debug(f"Sending CC for knob '{name}' (algo: {algo_key})")
-            knob_names = H9FullAlgorithmData.knob_names(algo_key)
-            knob_names.reverse()
-
-            knob_names_upper = [k.upper() for k in knob_names]
-            if name in knob_names_upper:
-                knob_index_1based = knob_names_upper.index(name) + 1
-                cc_number = 21 + knob_index_1based
-                try:
-                    self._transport.send_control_change(
-                        control=cc_number,
-                        value=cc_value,
-                        channel=self._midi_channel,
-                    )
-                except Exception:
-                    self._logger.exception(
-                        "Failed to send CC for knob %s (idx=%s, CC=%d, value=%d)",
-                        name,
-                        knob_index_1based,
-                        cc_number,
-                        cc_value,
-                    )
-            else:
-                self._logger.debug(
-                    f"Knob '{name}' not mapped to a CC for algo '{algo_key}'"
-                )
-        elif self._transport is None:
+        if self._transport is None:
             self._logger.warning(f"Cannot send CC for '{name}': not connected")
-        elif not algo_key:
-            self._logger.warning(
-                f"Cannot send CC for '{name}': no algorithm_key loaded"
-            )
+            return False
 
-        # Store the override on the 7-bit grid the device actually received
-        # (reconstructed from the CC value we sent — identical to `cc_value`
-        # since that is what the 7-bit conversion produces). Storing the raw
-        # 14-bit value would leave the UI showing a value the device does
-        # not have, and repeated small adjustments would never converge.
-        # When nothing was sent (no transport/unmapped knob) the same CC
-        # value is used so stored overrides stay on one consistent grid.
-        stored_raw = max(
-            0,
-            min(MAX_KNOB_VALUE_14BIT, int(round((cc_value / 127.0) * MAX_KNOB_VALUE_14BIT))),
-        )
-        self._knob_overrides[name] = stored_raw
+        try:
+            self._transport.send_control_change(
+                control=cc_number,
+                value=cc_value,
+                channel=self._midi_channel,
+            )
+        except Exception:
+            self._logger.exception(
+                "Failed to send CC for knob %s (CC=%d, value=%d)",
+                name,
+                cc_number,
+                cc_value,
+            )
+            return False
+        return True
 
     @QtCore.Slot()
     def shutdown(self) -> None:
@@ -954,6 +993,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
             algorithm_key=preset.algorithm_key,
             bpm=bpm,
             knobs=tuple(self._build_knobs(preset)),
+            all_knobs=self._build_all_knobs(preset),
             lock_delay=self._config.lock_delay,
             lock_feedback=self._config.lock_feedback,
             lock_pitch=self._config.lock_pitch,
@@ -967,23 +1007,36 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
         for name in self._config.knob_order:
             if name not in preset.knobs_by_name:
                 continue
-            override = self._knob_overrides.get(name)
+            override = self._knob_overrides.get(name.upper())
             raw = int(preset.knobs_by_name[name] if override is None else override)
-            pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
-            pretty = format_knob_value(
-                algorithm_key=preset.algorithm_key,
-                knob_name=name,
-                raw_value=raw,
-            )
             knobs.append(
-                KnobBarState(
+                _build_knob_state(
                     name=name,
-                    percent=max(0, min(100, pct)),
                     raw_value=raw,
-                    pretty=(pretty.label if pretty is not None else None),
+                    algorithm_key=preset.algorithm_key,
                 )
             )
         return knobs
+
+    def _build_all_knobs(self, preset: PresetSnapshot) -> tuple[KnobBarState, ...]:
+        """Every knob of the preset, in hardware/CC order (top row first)."""
+        if not preset.algorithm_key or not preset.knobs_by_name:
+            return ()
+
+        knobs: list[KnobBarState] = []
+        for name in ordered_knob_names(preset.algorithm_key):
+            if name not in preset.knobs_by_name:
+                continue
+            override = self._knob_overrides.get(name.upper())
+            raw = int(preset.knobs_by_name[name] if override is None else override)
+            knobs.append(
+                _build_knob_state(
+                    name=name,
+                    raw_value=raw,
+                    algorithm_key=preset.algorithm_key,
+                )
+            )
+        return tuple(knobs)
 
     def _state_from_prev(self, *, connected: bool, status_text: str) -> DashboardState:
         """Keep the last preset snapshot so the UI can grey it out."""
@@ -997,6 +1050,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
             algorithm_key=prev.algorithm_key,
             bpm=prev.bpm,
             knobs=prev.knobs,
+            all_knobs=prev.all_knobs,
             lock_delay=self._config.lock_delay,
             lock_feedback=self._config.lock_feedback,
             lock_pitch=self._config.lock_pitch,
@@ -1033,6 +1087,7 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
                     algorithm_key=prev.algorithm_key,
                     bpm=prev.bpm,
                     knobs=prev.knobs,
+                    all_knobs=prev.all_knobs,
                     lock_delay=self._config.lock_delay,
                     lock_feedback=self._config.lock_feedback,
                     lock_pitch=self._config.lock_pitch,
@@ -1106,27 +1161,8 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
 
     def _state_with_overrides(self) -> DashboardState:
         prev = self._last_state
-        if not prev.knobs:
+        if not prev.knobs and not prev.all_knobs:
             return prev
-
-        updated: list[KnobBarState] = []
-        for k in prev.knobs:
-            name = k.name
-            raw = int(self._knob_overrides.get(name.upper(), k.raw_value))
-            pct = int(round((raw / MAX_KNOB_VALUE_14BIT) * 100.0))
-            pretty = format_knob_value(
-                algorithm_key=prev.algorithm_key,
-                knob_name=name,
-                raw_value=raw,
-            )
-            updated.append(
-                KnobBarState(
-                    name=name,
-                    percent=max(0, min(100, pct)),
-                    raw_value=raw,
-                    pretty=(pretty.label if pretty is not None else k.pretty),
-                )
-            )
 
         return DashboardState(
             connected=prev.connected,
@@ -1137,10 +1173,25 @@ class H9DeviceWorker(BpmSyncMixin, QtCore.QObject):
             algorithm_key=prev.algorithm_key,
             bpm=prev.bpm,
             live_bpm=self._live_bpm,
-            knobs=tuple(updated),
+            knobs=self._apply_overrides(prev.knobs, prev.algorithm_key),
+            all_knobs=self._apply_overrides(prev.all_knobs, prev.algorithm_key),
             lock_delay=self._config.lock_delay,
             lock_feedback=self._config.lock_feedback,
             lock_pitch=self._config.lock_pitch,
+        )
+
+    def _apply_overrides(
+        self, knobs: tuple[KnobBarState, ...], algorithm_key: str | None
+    ) -> tuple[KnobBarState, ...]:
+        """Recompute knob view models with any pending UI overrides applied."""
+        return tuple(
+            _build_knob_state(
+                name=k.name,
+                raw_value=self._knob_overrides.get(k.name.upper(), k.raw_value),
+                algorithm_key=algorithm_key,
+                fallback_pretty=k.pretty,
+            )
+            for k in knobs
         )
 
     def _start_rx_thread_if_needed(self) -> None:

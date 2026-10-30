@@ -168,7 +168,8 @@ def test_default_shortcuts_have_expected_actions() -> None:
     keyboard = ShortcutsConfig.default().keyboard
     assert keyboard["sync_live_bpm"] == ["D"]
     assert keyboard["settings"] == ["S"]
-    assert len(keyboard) == 20
+    assert keyboard["show_all_knobs"] == ["K"]
+    assert len(keyboard) == 21
 
 
 def test_default_shortcuts_cover_preset_navigation() -> None:

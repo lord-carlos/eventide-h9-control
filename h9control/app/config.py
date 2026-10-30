@@ -77,6 +77,7 @@ class ShortcutsConfig:
                 "adjust_bpm_down": ["T"],
                 "sync_live_bpm": ["D"],
                 "settings": ["S"],
+                "show_all_knobs": ["K"],
                 # Preset navigation / refresh defaults, matching the keys used
                 # in the example config.json (digits 1-5 are taken by the
                 # knob adjustments, so jumps use the Z/X/C/V/B row instead).

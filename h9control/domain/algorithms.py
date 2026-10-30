@@ -424,3 +424,25 @@ class H9FullAlgorithmData:
         """Back-compat: historically we called the category field `algorithm_number`."""
 
         return cls.resolve_key_from_category_index(algorithm_number, effect_index)
+
+
+def human_algorithm_name(
+    algorithm_key: str | None, algorithm_name: str | None
+) -> str:
+    """Prefer a readable algorithm name while retaining the H9 key separately."""
+
+    key = (algorithm_key or "").strip()
+    name = (algorithm_name or "").strip()
+    if name and (not key or name.upper() != key.upper()):
+        return name
+
+    if key:
+        display_names = H9FullAlgorithmData.get_info(key).get("display_names", [])
+        for candidate in reversed(display_names):
+            if candidate.upper() != key.upper() and " " in candidate:
+                return candidate
+        for candidate in display_names:
+            if candidate.upper() != key.upper():
+                return candidate
+
+    return name or key or "—"

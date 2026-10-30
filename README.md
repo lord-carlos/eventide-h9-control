@@ -62,8 +62,13 @@ Defaults:
 | `1`–`4` / `Q`–`R` | Raise / lower the four main knobs (order set by `knob_order`) |
 | `5` / `T` | BPM up / down |
 | `D` | Sync live BPM to the H9 |
+| `K` | All-knobs page (every knob of the current algorithm) |
 | `S` | Settings |
 | `F5` | Connect / refresh |
+
+The same action names work under `shortcuts.gpio` and
+`shortcuts.rotary_encoders` (for example `"show_all_knobs"`), so a physical
+button or encoder can open the all-knobs page too.
 
 ## CLI
 

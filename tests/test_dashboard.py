@@ -66,6 +66,20 @@ def test_dashboard_actions_remain_touchable() -> None:
     app.processEvents()
 
 
+def test_dashboard_all_knobs_button_emits_request() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    widget = DashboardWidget()
+
+    requested: list[bool] = []
+    widget.all_knobs_requested.connect(lambda: requested.append(True))
+
+    widget._btn_knobs.click()
+
+    assert requested == [True]
+    widget.deleteLater()
+    app.processEvents()
+
+
 def test_dashboard_bpm_tile_opens_bpm_adjust_popup() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     widget = DashboardWidget()

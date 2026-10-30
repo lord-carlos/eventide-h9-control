@@ -70,6 +70,12 @@ def main() -> None:
         help="Delay before taking the screenshot. Default: 1500 ms.",
     )
     parser.add_argument(
+        "--screenshot-page",
+        choices=("dashboard", "knobs", "settings"),
+        default="dashboard",
+        help="Page to show in screenshot mode. Default: dashboard.",
+    )
+    parser.add_argument(
         "--screenshot-width",
         type=int,
         default=1180,
@@ -124,6 +130,10 @@ def main() -> None:
     window = MainWindow(config)
     if args.screenshot is not None:
         window.resize(args.screenshot_width, args.screenshot_height)
+        if args.screenshot_page == "knobs":
+            window.stack.setCurrentWidget(window.knobs)
+        elif args.screenshot_page == "settings":
+            window.stack.setCurrentWidget(window.settings)
     elif args.fullscreen:
         configure_fullscreen(window)
     else:
@@ -171,6 +181,16 @@ def main() -> None:
     window.dashboard.adjust_knob_slot_requested.connect(
         worker.adjust_knob_slot, QtCore.Qt.ConnectionType.QueuedConnection
     )
+    window.dashboard.all_knobs_requested.connect(window.show_knob_page)
+    worker.all_knobs_requested.connect(
+        window.show_knob_page, QtCore.Qt.ConnectionType.QueuedConnection
+    )
+    window.knobs.set_knob_requested.connect(
+        worker.set_knob_value, QtCore.Qt.ConnectionType.QueuedConnection
+    )
+    window.knobs.adjust_knob_requested.connect(
+        worker.adjust_knob, QtCore.Qt.ConnectionType.QueuedConnection
+    )
     window.dashboard.adjust_bpm_requested.connect(
         worker.adjust_bpm, QtCore.Qt.ConnectionType.QueuedConnection
     )
@@ -182,6 +202,7 @@ def main() -> None:
     )
 
     worker.state_changed.connect(window.dashboard.apply_state)
+    worker.state_changed.connect(window.knobs.apply_state)
 
     beat_detector: BeatDetector | None = None
     if not args.no_audio:
